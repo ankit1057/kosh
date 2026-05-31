@@ -22,11 +22,16 @@ dependencies = [
  "cost_estimator",
  "indexer",
  "mcp_router",
+ "packet_engine",
  "tool_registry",
 ]
 
 [[package]]
 name = "mcp_router"
+version = "0.1.0"
+
+[[package]]
+name = "packet_engine"
 version = "0.1.0"
 
 [[package]]
