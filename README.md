@@ -96,3 +96,10 @@ kosh gain --by-context
 The token estimate currently uses a simple 4 characters per token heuristic. This is deliberately conservative and dependency-free for the bootstrap implementation.
 
 Repo names are inferred from the current directory. Override attribution with `KOSH_REPO` and `KOSH_FEATURE`.
+
+## Credits & Acknowledgments
+
+Kosh is built upon the foundational work and vision of several pioneer projects in the AI agent space:
+
+- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)**: Kosh inherits its core token elimination mission and "Proxy" architecture from the original RTK project by the **RTK AI team**.
+- **[MadCat](https://gitlab.com/cabalbl4/madcat)**: Kosh's long-term memory vision and future research fact layer are inspired by the MadCat project by **cabalbl4**.
