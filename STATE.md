@@ -2,41 +2,52 @@
 
 Date: 2026-06-01
 
-This repository is a bootstrap implementation of **Kosh** (formerly known as KOSH OS).
+This repository is **Kosh** — a token elimination and context efficiency platform for agentic development.
 
-## Pivot Acknowledgment
-We have recently pivoted away from building a code-intelligence platform (Sourcegraph-lite) and firmly re-anchored on **Token Economics**. Kosh is a token elimination infrastructure. Our primary KPIs are tokens, tool calls, file reads, and latency avoided.
+## Identity
 
-*Constraint:* We will NOT build anything requiring an LLM until Kosh proves substantial token savings using deterministic systems (aliases, caching, leasing, batching, and symbolic references).
+- **Project:** Kosh
+- **Technology:** RTK (Rust Token Killer) — the underlying binary and engine
+- **Binary:** `kosh`
+- **Config dir:** `.kosh/` (falls back to `.rtk/` for existing data)
+- **Env vars:** `KOSH_REPO`, `KOSH_FEATURE` (fall back to `RTK_REPO`, `RTK_FEATURE`)
 
-## What Exists
+## Constraint
 
-- A Rust workspace builds successfully with these crates:
-  - `apps/cli` (currently named `kosh-cli`, execution binary is `rtk`)
-  - `crates/tool_registry`
-  - `crates/mcp_router`
-  - `crates/cache_engine`
-  - `crates/cost_estimator`
-  - `crates/indexer`
-- Command aliases are supported.
-- MCP aliases are supported.
-- Symbol aliases are supported (e.g., `@authrepo => lib/...`).
-- **Context Leasing:** Stable handles (e.g., `lease:auth:001`) allow referencing cached context with minimal tokens.
-- Gain tracking exists (`.kosh/history.tsv`), which tracks shorthand and lease savings.
-- Repository indexing exists (inventories files, detects languages, hashes content).
-- Token savings are estimated with a simple 4 characters per token heuristic.
+No LLMs, no embeddings, no graph intelligence until Kosh proves substantial token savings using deterministic systems alone.
+
+## What Exists (Milestone 2 Complete)
+
+Rust workspace with these crates:
+- `apps/cli` — binary `kosh`
+- `crates/tool_registry` — command alias expansion
+- `crates/mcp_router` — MCP alias expansion and symbol resolution
+- `crates/cache_engine` — context cache + context leasing (`lease:auth:001` style handles)
+- `crates/cost_estimator` — compression history and gain tracking
+- `crates/indexer` — file index snapshot
+- `crates/packet_engine` — context packet bundles
+
+### Capabilities
+
+- **Command aliases:** `kosh gs`, `kosh gd` etc.
+- **MCP aliases:** `kosh mcp expand "rf @authrepo"` expands to structured tool calls
+- **Symbol aliases:** `@authrepo => lib/features/auth/...`
+- **Context Cache:** fingerprint-keyed cache in `.kosh/cache.tsv`
+- **Context Leasing:** stable handles (`lease:auth:001`) — create/get/touch/list/stats
+- **MCP Batching:** `kosh batch '[{"tool":"read_file","path":"..."}]'` — collapses N serial calls, records `mcp_batch` in gain history
+- **Context Packets:** `kosh packet create|load|list|delete` — bundles files+symbols into a single loadable handle, records `packet_create`/`packet_load` in gain history
+- **Repository Indexing:** `kosh index`, `kosh index diff`
+- **Gain Tracking:** `kosh gain`, `kosh gain --by-kind`, `kosh gain --history` — tracks all savings
 
 ## What Does Not Exist Yet
 
-- **MCP Batching:** No capability to batch multiple tool calls into one execution to save roundtrips.
-- **Context Packets:** Bundles of files/symbols behind a single handle.
-- No real MCP server or transport implementation exists.
-- No daemon exists.
+- No real MCP server or transport (all current functionality is CLI-only)
+- No daemon
+- Context Packets do not yet resolve `@symbol` references through the symbol alias table (they store the symbol string as-is)
+- Lease fingerprints are not yet linked to actual file byte sizes in the indexer (token savings use a 20k-char heuristic)
 
-## Next Sensible Implementation Steps (Token-Optimized)
+## Next Sensible Implementation Steps
 
-Based on the **Kosh Token Economy Report v1**:
-
-1. **Context Packets:** Group related files/symbols into single loadable packets. This eliminates the "exploratory" turns where an agent lists directories and reads files one by one.
-2. **MCP Batching:** Implement the ability to parse and execute a batch of MCP commands to collapse serial turns and save context history retransmission.
-3. (Completed): Renamed `rtk` binary, `.rtk` config folder, and environment variables to `kosh` to complete the project identity pivot.
+1. **Packet → Symbol resolution:** When `kosh packet load` sees an `@symbol`, resolve it through `.kosh/symbols.aliases` before emitting the MCP call
+2. **Lease size accuracy:** Link lease fingerprints to indexer data so `lease touch` records actual avoided bytes instead of the 20k heuristic
+3. **MCP server stub:** A minimal stdio MCP server that wraps the CLI, enabling agent integration without shell invocation
