@@ -83,21 +83,16 @@ fn print_help() {
          \n\
          Examples:\n\
            kosh gs\n\
-           kosh gd\n\
-           kosh expand gs\n\
-           kosh dart files\n\
            kosh config init\n\
            kosh mcp expand \"rf @authrepo\"\n\
-           kosh symbols put @authrepo lib/features/auth/data/repositories/auth_repository_impl.dart\n\
-           kosh cache fingerprint --repo veil --feature auth --hash xyz\n\
-           kosh cache put --repo veil --feature auth --hash xyz --summary \"Auth context\"\n\
-           kosh cache get veil:auth:xyz\n\
+           kosh symbols put @authrepo src/auth.rs\n\
+           kosh lease create --repo kosh --feature auth --fingerprint xyz --summary \"Auth context\"\n\
+           kosh lease touch lease:auth:001\n\
+           kosh packet create --name auth --file src/auth.rs --symbol @authrepo\n\
+           kosh packet load auth\n\
+           kosh batch '[{{\"tool\":\"read_file\",\"path\":\"Cargo.toml\"}}]'\n\
            kosh index\n\
-           kosh index diff\n\
-           kosh gain --history\n\
-           kosh gain --by-kind\n\
-           kosh gain --by-context\n\
-           kosh proxy git status"
+           kosh gain --history"
     );
 }
 
@@ -405,7 +400,7 @@ fn handle_config(args: &[String]) -> Result<ExitCode, String> {
             write_if_missing(cfg_path("commands.aliases"), DEFAULT_COMMAND_ALIAS_CONFIG)?;
             write_if_missing(cfg_path("mcp.aliases"), DEFAULT_MCP_ALIAS_CONFIG)?;
             write_if_missing(cfg_path("symbols.aliases"), DEFAULT_SYMBOL_ALIAS_CONFIG)?;
-            println!("created .kosh config");
+            println!("created {} config", config_dir());
             Ok(ExitCode::SUCCESS)
         }
         _ => Err("usage: kosh config init".to_string()),
@@ -587,6 +582,7 @@ fn maybe_record_compression(
 
 fn current_repo_name() -> String {
     env::var("KOSH_REPO")
+        .or_else(|_| env::var("RTK_REPO"))
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
@@ -952,8 +948,9 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
                 i += 1;
             }
 
-            let name = name
-                .ok_or("rtk packet create --name <name> [--file <path>]... [--symbol <@sym>]...")?;
+            let name = name.ok_or(
+                "kosh packet create --name <name> [--file <path>]... [--symbol <@sym>]...",
+            )?;
             let ts = current_timestamp_seconds();
             let record = PacketRecord::new(&name, files, symbols, ts);
             let json = record.to_compact_json();
@@ -968,25 +965,28 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         }
 
         "load" => {
-            let name = args.get(1).ok_or("rtk packet load <name>")?;
+            let name = args.get(1).ok_or("kosh packet load <name>")?;
 
             let store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             let record = store.get(name).ok_or(format!("packet not found: {name}"))?;
 
-            let mut lines: Vec<String> = Vec::new();
+            let mut calls: Vec<String> = Vec::new();
             for path in &record.files {
-                let line = format!("{{\"tool\":\"read_file\",\"path\":\"{}\"}}", path);
-                println!("{line}");
-                lines.push(line);
+                calls.push(format!(
+                    "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
+                    json_escape(path)
+                ));
             }
             for sym in &record.symbols {
-                let line = format!("{{\"tool\":\"read_file\",\"path\":\"{}\"}}", sym);
-                println!("{line}");
-                lines.push(line);
+                calls.push(format!(
+                    "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
+                    json_escape(sym)
+                ));
             }
 
-            let all_lines = lines.join("\n");
-            maybe_record_compression("packet_load", name, &all_lines, "ok")?;
+            let batch_json = format!("[{}]", calls.join(","));
+            println!("{batch_json}");
+            maybe_record_compression("packet_load", name, &batch_json, "ok")?;
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1004,7 +1004,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         }
 
         "delete" => {
-            let name = args.get(1).ok_or("rtk packet delete <name>")?;
+            let name = args.get(1).ok_or("kosh packet delete <name>")?;
 
             let mut store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             if store.delete(name) {
@@ -1016,7 +1016,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             }
         }
 
-        _ => Err("usage: rtk packet <create|load|list|delete>".to_string()),
+        _ => Err("usage: kosh packet <create|load|list|delete>".to_string()),
     }
 }
 
@@ -1135,7 +1135,7 @@ mod tests {
 
     fn tempfile_path() -> String {
         format!(
-            "/tmp/rtk_test_{}.txt",
+            "/tmp/kosh_test_{}.txt",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
