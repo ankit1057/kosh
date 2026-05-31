@@ -18,7 +18,7 @@ The primary KPIs are strictly economic:
 
 ## Project Overview
 
-- **Architecture**: A Rust workspace with a central CLI app and modular crates. *(Note: The codebase currently still uses the name `rtk` and `.rtk/` directories. A rename to `kosh` is planned but not fully executed).*
+- **Architecture**: A Rust workspace with a central CLI app and modular crates. *(Note: The codebase has been renamed to `kosh` and `.rtk/` directories. A rename to `kosh` is planned but not fully executed).*
 - **Primary Technology**: Rust (2021 edition), emphasizing a minimal dependency footprint and no unsafe code.
 - **Token Focus**: Every feature must answer: *"What measurable token expenditure does this eliminate?"*
 
@@ -43,7 +43,7 @@ The primary KPIs are strictly economic:
 - **Format**: `cargo fmt --all`
 - **Check**: `cargo check`
 
-*(Note: The binary and commands currently still use `rtk`.)*
+*(Note: The binary and commands now use `kosh`.)*
 - `kosh gain`: Show token/cost savings analytics.
 - `kosh index`: Scan repository and manage file inventory.
 - `kosh mcp expand "<alias> <arg>"`: Expand an MCP shorthand.
