@@ -20,15 +20,19 @@ use mcp_router::{
 use packet_engine::{PacketRecord, PacketStore};
 use tool_registry::{default_aliases, expand_command, parse_aliases, CommandAlias};
 
-const RTK_DIR: &str = ".kosh";
-const COMMAND_ALIASES_FILE: &str = ".kosh/commands.aliases";
-const MCP_ALIASES_FILE: &str = ".kosh/mcp.aliases";
-const SYMBOL_ALIASES_FILE: &str = ".kosh/symbols.aliases";
-const CACHE_FILE: &str = ".kosh/cache.tsv";
-const LEASES_FILE: &str = ".kosh/leases.tsv";
-const HISTORY_FILE: &str = ".kosh/history.tsv";
-const INDEX_FILE: &str = ".kosh/index.tsv";
-const PACKETS_FILE: &str = ".kosh/packets.tsv";
+fn config_dir() -> &'static str {
+    if std::path::Path::new(".kosh").exists() {
+        ".kosh"
+    } else if std::path::Path::new(".rtk").exists() {
+        ".rtk"
+    } else {
+        ".kosh"
+    }
+}
+
+fn cfg_path(name: &str) -> String {
+    format!("{}/{}", config_dir(), name)
+}
 const BLENDED_COST_PER_TOKEN: f64 = 0.00001;
 
 fn main() -> ExitCode {
@@ -110,8 +114,8 @@ fn handle_index(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Some("write") => {
-            fs::create_dir_all(RTK_DIR).map_err(format_io)?;
-            fs::write(INDEX_FILE, snapshot.to_tsv()).map_err(format_io)?;
+            fs::create_dir_all(config_dir()).map_err(format_io)?;
+            fs::write(cfg_path("index.tsv"), snapshot.to_tsv()).map_err(format_io)?;
             print_index_summary(&snapshot);
             Ok(ExitCode::SUCCESS)
         }
@@ -292,11 +296,11 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
         Some("put") => {
             let fingerprint = fingerprint_from_flags(args)?;
             let summary = flag_value(args, "--summary")?;
-            let mut cache = ContextCache::load(CACHE_FILE).map_err(format_io)?;
+            let mut cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
             let record = CacheRecord::new(fingerprint, summary);
             let key = record.key();
             cache.upsert(record);
-            cache.save(CACHE_FILE).map_err(format_io)?;
+            cache.save(&cfg_path("cache.tsv")).map_err(format_io)?;
             println!("{key}");
             Ok(ExitCode::SUCCESS)
         }
@@ -304,7 +308,7 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
             let key = args
                 .get(1)
                 .ok_or_else(|| "usage: kosh cache get <key>".to_string())?;
-            let cache = ContextCache::load(CACHE_FILE).map_err(format_io)?;
+            let cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
             let Some(record) = cache.get(key) else {
                 return Err(format!("cache miss: {key}"));
             };
@@ -312,7 +316,7 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
-            let cache = ContextCache::load(CACHE_FILE).map_err(format_io)?;
+            let cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
             for record in cache.records() {
                 println!("{}", record.to_compact_json());
             }
@@ -329,9 +333,10 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let feature = flag_value(args, "--feature")?;
             let fingerprint = flag_value(args, "--fingerprint")?;
             let summary = flag_value(args, "--summary")?;
-            let mut manager = ContextLeaseManager::load(LEASES_FILE).map_err(format_io)?;
+            let mut manager =
+                ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
             let lease = manager.create_lease(&repo, &feature, &fingerprint, &summary);
-            manager.save(LEASES_FILE).map_err(format_io)?;
+            manager.save(&cfg_path("leases.tsv")).map_err(format_io)?;
             println!("{}", lease.to_compact_json());
             Ok(ExitCode::SUCCESS)
         }
@@ -339,7 +344,7 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let id = args
                 .get(1)
                 .ok_or_else(|| "usage: kosh lease get <id>".to_string())?;
-            let manager = ContextLeaseManager::load(LEASES_FILE).map_err(format_io)?;
+            let manager = ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
             let lease = manager.get(id).ok_or_else(|| format!("lease miss: {id}"))?;
             println!("{}", lease.to_compact_json());
             Ok(ExitCode::SUCCESS)
@@ -348,7 +353,8 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let id = args
                 .get(1)
                 .ok_or_else(|| "usage: kosh lease touch <id>".to_string())?;
-            let mut manager = ContextLeaseManager::load(LEASES_FILE).map_err(format_io)?;
+            let mut manager =
+                ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
 
             // To avoid mutating the lease before formatting its JSON output,
             // we touch it, then print it, then log compression.
@@ -367,19 +373,19 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
 
             maybe_record_compression("lease_hit", &compact, &expanded_dummy, "ok")?;
 
-            manager.save(LEASES_FILE).map_err(format_io)?;
+            manager.save(&cfg_path("leases.tsv")).map_err(format_io)?;
             println!("{}", lease_json);
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
-            let manager = ContextLeaseManager::load(LEASES_FILE).map_err(format_io)?;
+            let manager = ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
             for record in manager.records() {
                 println!("{}", record.to_compact_json());
             }
             Ok(ExitCode::SUCCESS)
         }
         Some("stats") => {
-            let manager = ContextLeaseManager::load(LEASES_FILE).map_err(format_io)?;
+            let manager = ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
             let total_accesses: u64 = manager.records().iter().map(|r| r.access_count).sum();
             println!(
                 "{{\"total_leases\":{},\"total_accesses\":{}}}",
@@ -395,10 +401,10 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
 fn handle_config(args: &[String]) -> Result<ExitCode, String> {
     match args.first().map(String::as_str) {
         Some("init") => {
-            fs::create_dir_all(RTK_DIR).map_err(format_io)?;
-            write_if_missing(COMMAND_ALIASES_FILE, DEFAULT_COMMAND_ALIAS_CONFIG)?;
-            write_if_missing(MCP_ALIASES_FILE, DEFAULT_MCP_ALIAS_CONFIG)?;
-            write_if_missing(SYMBOL_ALIASES_FILE, DEFAULT_SYMBOL_ALIAS_CONFIG)?;
+            fs::create_dir_all(config_dir()).map_err(format_io)?;
+            write_if_missing(cfg_path("commands.aliases"), DEFAULT_COMMAND_ALIAS_CONFIG)?;
+            write_if_missing(cfg_path("mcp.aliases"), DEFAULT_MCP_ALIAS_CONFIG)?;
+            write_if_missing(cfg_path("symbols.aliases"), DEFAULT_SYMBOL_ALIAS_CONFIG)?;
             println!("created .kosh config");
             Ok(ExitCode::SUCCESS)
         }
@@ -495,8 +501,9 @@ fn execute_raw_code(args: &[String]) -> Result<i32, String> {
 
 fn load_command_aliases() -> Result<Vec<CommandAlias>, String> {
     let mut aliases = default_aliases();
-    if Path::new(COMMAND_ALIASES_FILE).exists() {
-        let contents = fs::read_to_string(COMMAND_ALIASES_FILE).map_err(format_io)?;
+    let path = cfg_path("commands.aliases");
+    if Path::new(&path).exists() {
+        let contents = fs::read_to_string(&path).map_err(format_io)?;
         aliases.extend(parse_aliases(&contents)?);
     }
     Ok(aliases)
@@ -504,24 +511,26 @@ fn load_command_aliases() -> Result<Vec<CommandAlias>, String> {
 
 fn load_mcp_aliases() -> Result<Vec<McpAlias>, String> {
     let mut aliases = default_mcp_aliases();
-    if Path::new(MCP_ALIASES_FILE).exists() {
-        let contents = fs::read_to_string(MCP_ALIASES_FILE).map_err(format_io)?;
+    let path = cfg_path("mcp.aliases");
+    if Path::new(&path).exists() {
+        let contents = fs::read_to_string(&path).map_err(format_io)?;
         aliases.extend(parse_mcp_aliases(&contents)?);
     }
     Ok(aliases)
 }
 
 fn load_symbol_aliases() -> Result<Vec<SymbolAlias>, String> {
-    if !Path::new(SYMBOL_ALIASES_FILE).exists() {
+    let path = cfg_path("symbols.aliases");
+    if !Path::new(&path).exists() {
         return Ok(Vec::new());
     }
 
-    let contents = fs::read_to_string(SYMBOL_ALIASES_FILE).map_err(format_io)?;
+    let contents = fs::read_to_string(&path).map_err(format_io)?;
     parse_symbol_aliases(&contents)
 }
 
 fn save_symbol_aliases(aliases: &[SymbolAlias]) -> Result<(), String> {
-    fs::create_dir_all(RTK_DIR).map_err(format_io)?;
+    fs::create_dir_all(config_dir()).map_err(format_io)?;
     let mut contents = String::new();
     contents.push_str("# KOSH symbol aliases.\n");
     contents.push_str("# Format: <@symbol> => <value>\n");
@@ -531,7 +540,7 @@ fn save_symbol_aliases(aliases: &[SymbolAlias]) -> Result<(), String> {
         contents.push_str(&alias.value);
         contents.push('\n');
     }
-    fs::write(SYMBOL_ALIASES_FILE, contents).map_err(format_io)
+    fs::write(cfg_path("symbols.aliases"), contents).map_err(format_io)
 }
 
 fn write_if_missing(path: impl Into<PathBuf>, contents: &str) -> Result<(), String> {
@@ -566,11 +575,11 @@ fn maybe_record_compression(
         return Ok(());
     }
 
-    fs::create_dir_all(RTK_DIR).map_err(format_io)?;
+    fs::create_dir_all(config_dir()).map_err(format_io)?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(HISTORY_FILE)
+        .open(cfg_path("history.tsv"))
         .map_err(format_io)?;
     file.write_all(record.to_tsv_line().as_bytes())
         .map_err(format_io)
@@ -593,7 +602,8 @@ fn current_repo_name() -> String {
 }
 
 fn current_feature_name() -> String {
-    env::var("RTK_FEATURE")
+    env::var("KOSH_FEATURE")
+        .or_else(|_| env::var("RTK_FEATURE"))
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "default".to_string())
@@ -607,11 +617,12 @@ fn current_timestamp_seconds() -> u64 {
 }
 
 fn load_history() -> Result<Vec<CompressionRecord>, String> {
-    if !Path::new(HISTORY_FILE).exists() {
+    let path = cfg_path("history.tsv");
+    if !Path::new(&path).exists() {
         return Ok(Vec::new());
     }
 
-    let contents = fs::read_to_string(HISTORY_FILE).map_err(format_io)?;
+    let contents = fs::read_to_string(&path).map_err(format_io)?;
     parse_compression_history(&contents)
 }
 
@@ -880,11 +891,12 @@ fn handle_batch(args: &[String]) -> Result<ExitCode, String> {
 }
 
 fn load_index_snapshot() -> Result<IndexSnapshot, String> {
-    if !Path::new(INDEX_FILE).exists() {
+    let path = cfg_path("index.tsv");
+    if !Path::new(&path).exists() {
         return Ok(IndexSnapshot::default());
     }
 
-    let contents = fs::read_to_string(INDEX_FILE).map_err(format_io)?;
+    let contents = fs::read_to_string(&path).map_err(format_io)?;
     IndexSnapshot::from_tsv(&contents)
 }
 
@@ -946,9 +958,9 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             let record = PacketRecord::new(&name, files, symbols, ts);
             let json = record.to_compact_json();
 
-            let mut store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            let mut store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             store.upsert(record);
-            store.save(PACKETS_FILE).map_err(format_io)?;
+            store.save(&cfg_path("packets.tsv")).map_err(format_io)?;
 
             println!("{json}");
             maybe_record_compression("packet_create", &name, &json, "ok")?;
@@ -958,7 +970,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         "load" => {
             let name = args.get(1).ok_or("rtk packet load <name>")?;
 
-            let store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            let store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             let record = store.get(name).ok_or(format!("packet not found: {name}"))?;
 
             let mut lines: Vec<String> = Vec::new();
@@ -979,7 +991,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         }
 
         "list" => {
-            let store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            let store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             for record in store.records() {
                 println!(
                     "{}\tfiles={}\tsymbols={}",
@@ -994,9 +1006,9 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         "delete" => {
             let name = args.get(1).ok_or("rtk packet delete <name>")?;
 
-            let mut store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            let mut store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             if store.delete(name) {
-                store.save(PACKETS_FILE).map_err(format_io)?;
+                store.save(&cfg_path("packets.tsv")).map_err(format_io)?;
                 println!("deleted: {name}");
                 Ok(ExitCode::SUCCESS)
             } else {
