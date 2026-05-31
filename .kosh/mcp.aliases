@@ -1,0 +1,5 @@
+# RTK MCP aliases.
+# Format: <alias> => <tool> <argument_name>
+rf => read_file path
+sf => search_files query
+ls => list_directory path

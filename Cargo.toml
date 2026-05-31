@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "apps/cli",
+    "crates/cache_engine",
+    "crates/cost_estimator",
+    "crates/indexer",
+    "crates/mcp_router",
+    "crates/tool_registry",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://example.invalid/rtk-os"
+version = "0.1.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

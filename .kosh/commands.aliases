@@ -1,0 +1,8 @@
+# RTK command aliases.
+# Format: <alias> => <expansion>
+#
+# These examples duplicate built-ins so the format is visible.
+gs => git status --short
+gd => git diff
+gl => git log --oneline -20
+dart files => find . -name *.dart

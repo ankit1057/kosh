@@ -1,0 +1,16 @@
+[package]
+name = "kosh-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "kosh"
+path = "src/main.rs"
+
+[dependencies]
+cache_engine = { path = "../../crates/cache_engine" }
+cost_estimator = { path = "../../crates/cost_estimator" }
+indexer = { path = "../../crates/indexer" }
+mcp_router = { path = "../../crates/mcp_router" }
+tool_registry = { path = "../../crates/tool_registry" }

@@ -1,0 +1,4 @@
+/target/
+/.rtk/cache.tsv
+/.rtk/history.tsv
+/.rtk/index.tsv
