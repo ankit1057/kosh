@@ -60,3 +60,8 @@ The primary KPIs are strictly economic:
 - **Token Economics**: Refer to `docs/kosh-token-economy-report-v1.md` for the primary architectural drivers.
 - **Roadmap**: Refer to `docs/master-plan.md` for the Token Economics Roadmap (prioritizing MCP Batching and Context Leasing).
 - **State**: Refer to `STATE.md` for the current "honest state" of the project.
+
+## Credits & Acknowledgments
+Kosh is built upon the foundational work and vision of:
+- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)** by the **RTK AI team**.
+- **[MadCat](https://gitlab.com/cabalbl4/madcat)** by **cabalbl4**.
