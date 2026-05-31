@@ -17,6 +17,7 @@ use mcp_router::{
     default_mcp_aliases, expand_mcp_alias, parse_mcp_aliases, parse_symbol_aliases,
     resolve_symbol_alias, McpAlias, SymbolAlias,
 };
+use packet_engine::{PacketRecord, PacketStore};
 use tool_registry::{default_aliases, expand_command, parse_aliases, CommandAlias};
 
 const RTK_DIR: &str = ".kosh";
@@ -27,6 +28,7 @@ const CACHE_FILE: &str = ".kosh/cache.tsv";
 const LEASES_FILE: &str = ".kosh/leases.tsv";
 const HISTORY_FILE: &str = ".kosh/history.tsv";
 const INDEX_FILE: &str = ".kosh/index.tsv";
+const PACKETS_FILE: &str = ".kosh/packets.tsv";
 const BLENDED_COST_PER_TOKEN: f64 = 0.00001;
 
 fn main() -> ExitCode {
@@ -64,6 +66,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "cache" => handle_cache(&args[1..]),
         "lease" => handle_lease(&args[1..]),
         "batch" => handle_batch(&args[1..]),
+        "packet" => handle_packet(&args[1..]),
         "symbols" => handle_symbols(&args[1..]),
         "proxy" => execute_raw(&args[1..]),
         _ => execute_expanded(&args),
@@ -907,6 +910,103 @@ const DEFAULT_SYMBOL_ALIAS_CONFIG: &str = r#"# KOSH symbol aliases.
 #
 # @authrepo => lib/features/auth/data/repositories/auth_repository_impl.dart
 "#;
+
+fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+
+    match subcommand {
+        "create" => {
+            let mut name: Option<String> = None;
+            let mut files: Vec<String> = Vec::new();
+            let mut symbols: Vec<String> = Vec::new();
+
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--name" => {
+                        i += 1;
+                        name = Some(args.get(i).ok_or("--name requires a value")?.clone());
+                    }
+                    "--file" => {
+                        i += 1;
+                        files.push(args.get(i).ok_or("--file requires a value")?.clone());
+                    }
+                    "--symbol" => {
+                        i += 1;
+                        symbols.push(args.get(i).ok_or("--symbol requires a value")?.clone());
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            let name = name
+                .ok_or("rtk packet create --name <name> [--file <path>]... [--symbol <@sym>]...")?;
+            let ts = current_timestamp_seconds();
+            let record = PacketRecord::new(&name, files, symbols, ts);
+            let json = record.to_compact_json();
+
+            let mut store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            store.upsert(record);
+            store.save(PACKETS_FILE).map_err(format_io)?;
+
+            println!("{json}");
+            maybe_record_compression("packet_create", &name, &json, "ok")?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "load" => {
+            let name = args.get(1).ok_or("rtk packet load <name>")?;
+
+            let store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            let record = store.get(name).ok_or(format!("packet not found: {name}"))?;
+
+            let mut lines: Vec<String> = Vec::new();
+            for path in &record.files {
+                let line = format!("{{\"tool\":\"read_file\",\"path\":\"{}\"}}", path);
+                println!("{line}");
+                lines.push(line);
+            }
+            for sym in &record.symbols {
+                let line = format!("{{\"tool\":\"read_file\",\"path\":\"{}\"}}", sym);
+                println!("{line}");
+                lines.push(line);
+            }
+
+            let all_lines = lines.join("\n");
+            maybe_record_compression("packet_load", name, &all_lines, "ok")?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "list" => {
+            let store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            for record in store.records() {
+                println!(
+                    "{}\tfiles={}\tsymbols={}",
+                    record.name,
+                    record.files.len(),
+                    record.symbols.len()
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "delete" => {
+            let name = args.get(1).ok_or("rtk packet delete <name>")?;
+
+            let mut store = PacketStore::load(PACKETS_FILE).map_err(format_io)?;
+            if store.delete(name) {
+                store.save(PACKETS_FILE).map_err(format_io)?;
+                println!("deleted: {name}");
+                Ok(ExitCode::SUCCESS)
+            } else {
+                Err(format!("packet not found: {name}"))
+            }
+        }
+
+        _ => Err("usage: rtk packet <create|load|list|delete>".to_string()),
+    }
+}
 
 #[cfg(test)]
 mod tests {
