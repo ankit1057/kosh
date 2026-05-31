@@ -332,9 +332,19 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let feature = flag_value(args, "--feature")?;
             let fingerprint = flag_value(args, "--fingerprint")?;
             let summary = flag_value(args, "--summary")?;
+            let byte_size = flag_value(args, "--size")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or_else(|| {
+                    // Try to get current repo size as a default
+                    load_index_snapshot()
+                        .map(|snapshot| snapshot.summary().bytes)
+                        .unwrap_or(20_000)
+                });
+
             let mut manager =
                 ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
-            let lease = manager.create_lease(&repo, &feature, &fingerprint, &summary);
+            let lease = manager.create_lease(&repo, &feature, &fingerprint, &summary, byte_size);
             manager.save(&cfg_path("leases.tsv")).map_err(format_io)?;
             println!("{}", lease.to_compact_json());
             Ok(ExitCode::SUCCESS)
@@ -355,20 +365,14 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let mut manager =
                 ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
 
-            // To avoid mutating the lease before formatting its JSON output,
-            // we touch it, then print it, then log compression.
             let lease = manager
                 .touch(id)
                 .ok_or_else(|| format!("lease miss: {id}"))?;
+            let byte_size = lease.byte_size;
             let lease_json = lease.to_compact_json();
 
-            // Record token compression
-            // For now, we simulate the expanded context using a dummy repetition of characters
-            // derived from a heuristic (e.g. an assumed 20k chars per lease) to reflect saved context.
-            // A more sophisticated system would link the fingerprint to an index map to get true byte size.
             let compact = format!("lease:{}", id);
-            let simulated_expanded_chars = 20_000; // heuristic for a typical context lease size
-            let expanded_dummy = "a".repeat(simulated_expanded_chars);
+            let expanded_dummy = "a".repeat(byte_size as usize);
 
             maybe_record_compression("lease_hit", &compact, &expanded_dummy, "ok")?;
 
@@ -982,9 +986,10 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
                 ));
             }
             for sym in &record.symbols {
+                let resolved = resolve_symbol_alias(sym, &load_symbol_aliases()?);
                 calls.push(format!(
                     "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
-                    json_escape(sym)
+                    json_escape(&resolved)
                 ));
             }
 
