@@ -21,13 +21,17 @@ use packet_engine::{PacketRecord, PacketStore};
 use tool_registry::{default_aliases, expand_command, parse_aliases, CommandAlias};
 
 fn config_dir() -> &'static str {
-    if std::path::Path::new(".kosh").exists() {
-        ".kosh"
-    } else if std::path::Path::new(".rtk").exists() {
-        ".rtk"
-    } else {
-        ".kosh"
-    }
+    use std::sync::OnceLock;
+    static DIR: OnceLock<&'static str> = OnceLock::new();
+    DIR.get_or_init(|| {
+        if std::path::Path::new(".kosh").exists() {
+            ".kosh"
+        } else if std::path::Path::new(".rtk").exists() {
+            ".rtk"
+        } else {
+            ".kosh"
+        }
+    })
 }
 
 fn cfg_path(name: &str) -> String {
