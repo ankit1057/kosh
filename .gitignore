@@ -1,4 +1,7 @@
 /target/
-/.rtk/cache.tsv
-/.rtk/history.tsv
-/.rtk/index.tsv
+.kosh/*.tsv
+.DS_Store
+.env
+.idea/
+.vscode/
+*.log
