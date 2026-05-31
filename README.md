@@ -1,16 +1,21 @@
-# KOSH OS
+# Kosh
 
-KOSH OS is a context virtualization layer for AI agents. The first milestone focuses on making repository context representable, reusable, and referable through compact handles.
+Kosh is a context virtualization layer for AI agents. It treats repository context as a referable, reusable, and compressible resource, significantly reducing token costs in autonomous engineering workflows.
 
-This repository is intentionally starting with the useful core:
+## Documentation
 
-- `KOSH CLI`: compact commands for common agent workflows.
-- `Indexer`: file inventory, language detection, hashing, and change detection.
-- `MCP Compression`: terse aliases that expand into structured MCP tool calls.
-- `Context Cache`: stable fingerprints for repository and task context.
-- `Cost Engine`: lightweight estimates for token and cost savings.
+- **[Technical Whitepaper](docs/whitepaper.md)**: The core thesis on Token Economics and Context Virtualization.
+- **[User Guide](docs/USER_GUIDE.md)**: Installation, configuration, and first steps.
+- **[Lease Economy Report](docs/LEASE_ECONOMY_REPORT.md)**: Projections on token and read savings.
 
-Later phases add symbol graphs, context leases, MCP batching, executable skills, a research fact layer, MadCat memory, and universal agent adapters.
+## Key Features
+
+- `Kosh CLI`: Compact commands for common agent workflows.
+- `Context Leasing`: Stable handles (e.g., `lease:auth:001`) to eliminate redundant retransmissions.
+- `Context Packets`: Group related files/symbols into loadable bundles.
+- `MCP Batching`: Collapse multiple tool calls into one roundtrip.
+- `Indexer`: File inventory, language detection, and change tracking.
+- `Gain Tracking`: Real-time monitoring of token and cost savings.
 
 ## Quick Start
 
