@@ -1,15 +1,42 @@
 # Kosh
 
-**Context virtualization for AI agents. Measure and eliminate token waste.**
+**The context layer in a deterministic optimization stack for agentic development.**
 
-Kosh treats repository context as a referable, reusable, and compressible resource.
-Instead of retransmitting the same files across every agent turn, Kosh lets agents
-reference context by handle — and tracks exactly how many tokens were avoided.
+```
+              ┌───────────────┐
+              │    Agent      │
+              └───────┬───────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │    PRECC      │  eliminates avoidable mistakes
+              │ Input Layer   │  (wrong dir, missing dep, bad flag)
+              └───────┬───────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │     Kosh      │  eliminates avoidable context
+              │ Context Layer │  (repeated reads, re-discovered files)
+              └───────┬───────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │      RTK      │  compresses unavoidable output
+              │ Output Layer  │  (build logs, test output, git diff)
+              └───────┬───────┘
+                      │
+                      ▼
+                   Tools
+```
 
-> **Kosh vs prompt caching:** Anthropic/OpenAI prompt caching reduces the *cost* of
-> retransmitting a cached prefix (~90% discount on cache reads). Kosh reduces the *need*
-> to transmit that prefix in the first place — and eliminates the round trips that caching
-> never touches: repeated `read_file`, `grep`, and `find` calls that accumulate as growing,
+Each layer eliminates a different kind of waste. PRECC prevents bad tool calls before
+they execute. Kosh prevents unnecessary context from accumulating across turns. RTK
+compresses the output that remains. Together they cover the entire agent loop.
+
+> **Kosh vs prompt caching:** Prompt caching reduces the *cost* of retransmitting a
+> cached prefix (~90% discount on cache reads). Kosh reduces the *need* to transmit that
+> prefix in the first place — and eliminates the round trips that caching never touches:
+> repeated `read_file`, `grep`, and `find` calls that accumulate as growing,
 > un-cacheable conversation history. Use both together.
 
 ---
@@ -261,9 +288,40 @@ change the architecture.
 **Run the tests:**
 
 ```bash
-cargo test       # 46 unit tests across all crates
+cargo test       # 57 unit tests across all crates
 cargo check      # zero warnings policy
 cargo fmt --all  # enforced formatting
+```
+
+---
+
+## Ecosystem
+
+Kosh is the context layer in a three-layer deterministic optimization stack:
+
+| Layer | Tool | Eliminates | Mechanism |
+|-------|------|------------|-----------|
+| Input | [PRECC](https://github.com/ankit1057/precc) | Avoidable mistakes | Pre-execution command shaping |
+| Context | **Kosh** | Avoidable context | Leasing, packets, signatures, batching |
+| Output | [RTK](https://github.com/ankit1057/rtk) | Avoidable payload | Deterministic output compression |
+
+PRECC's README describes it as "the missing input-shaping layer that sits next to
+output-compressing tools." Kosh is the missing middle — preventing unnecessary context
+from ever reaching the model, while RTK compresses what can't be avoided.
+
+**PRECC + Kosh integration (planned v1.0):** When PRECC intercepts a `grep -R AuthRepository .`
+call, instead of running grep it will consult `kosh context resolve AuthRepository` — if a
+lease exists, the read never happens. Avoidable mistakes and avoidable context eliminated
+in a single round trip.
+
+**Unified telemetry goal:** One `kosh gain` report across all three layers:
+
+```
+tool calls avoided    (PRECC)
+reads avoided         (Kosh)
+context avoided       (Kosh)
+tokens avoided        (RTK)
+latency avoided       (all)
 ```
 
 ---
@@ -274,20 +332,23 @@ cargo fmt --all  # enforced formatting
 v0.1  ✅  Aliases, symbols, cache, gain tracking, indexer
 v0.2  ✅  Context leasing, MCP batching, context packets, kosh rename
 v0.3  🔲  kosh benchmark CLI, packet symbol resolution, lease size accuracy
-v0.4  🔲  Context signatures + composition (Jaccard overlap scoring, kosh signature match)
+v0.4  🔲  Context signatures + composition (Jaccard overlap scoring, kosh signature match) [crate DONE]
 v0.5  🔲  Real session replay benchmark — actual API, prompt caching on, savings + task-success paired
-v0.6  🔲  MCP proxy — transparent stdio interception (proven pattern: mcpwall, mcp-audit)
+v0.6  🔲  MCP proxy — transparent stdio interception (proven: mcpwall, mcp-audit prior art)
 v0.7  🔲  Deterministic context planner — task description → minimum required files, no repo exploration
 v0.8  🔲  Fact engine — architecture decisions, known bugs, TSV + SQLite FTS5, confidence scores
 v0.9  🔲  Kosh OS — context fingerprint → lease match → fact match → answer, 0 redundant reads
+v1.0  🔲  Kosh OS Integration — PRECC → Kosh → RTK unified telemetry, cross-layer gain tracking
 ```
 
 ---
 
 ## Credits
 
-- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)** — core token elimination mission
-  and proxy architecture
+- **[PRECC](https://github.com/ankit1057/precc)** — input-layer optimization; "the missing
+  input-shaping layer that sits next to output-compressing tools" — Kosh is that middle layer
+- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)** — output-layer compression,
+  core token elimination mission and proxy architecture
 - **[MadCat](https://gitlab.com/cabalbl4/madcat)** — long-term memory and research fact layer inspiration
 
 ---
@@ -297,4 +358,5 @@ v0.9  🔲  Kosh OS — context fingerprint → lease match → fact match → a
 #ai #llm #agents #tokenoptimization #claudecode #mcp #rust #contextwindow
 #aiengineering #llmops #agentic #tokensaving #rustlang #openhermes #mlx
 #aiinfrastructure #contextcompression #aitools #codingagents #aiproductivity
+#agentoptimization #deterministicai #contextelimination #agenticstack #kosh
 -->
