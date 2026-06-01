@@ -96,13 +96,21 @@ and reproducible across sessions and releases.
 
 ---
 
-## Quick Start
+## Install
 
 ```bash
-git clone https://github.com/ankit1057/agent-kosh
-cd agent-kosh
-cargo build
-./target/debug/kosh --help
+curl -sSf https://raw.githubusercontent.com/ankit1057/kosh/main/scripts/install.sh | bash
+```
+
+Requires Rust. Installs the `kosh` binary via `cargo install` and runs `kosh config init`.
+
+Or build from source:
+
+```bash
+git clone https://github.com/ankit1057/kosh
+cd kosh
+cargo build --release
+./target/release/kosh --help
 ```
 
 ### Initialize a project
