@@ -13,7 +13,9 @@ cache_engine = { path = "../../crates/cache_engine" }
 context_resolver = { path = "../../crates/context_resolver" }
 context_signatures = { path = "../../crates/context_signatures" }
 cost_estimator = { path = "../../crates/cost_estimator" }
+fact_engine = { path = "../../crates/fact_engine" }
 indexer = { path = "../../crates/indexer" }
+mcp_proxy = { path = "../../crates/mcp_proxy" }
 mcp_router = { path = "../../crates/mcp_router" }
 packet_engine = { path = "../../crates/packet_engine" }
 rusqlite = { version = "0.32", features = ["bundled"] }

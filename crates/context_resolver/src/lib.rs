@@ -1,5 +1,6 @@
 use cache_engine::db::{ContextFingerprintV2, DbLeaseStore, DbLeaseRecord};
 use packet_engine::PacketStore;
+use symbol_extractor::SymbolTable;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,15 +17,18 @@ pub struct ContextRecommendation {
 pub struct ContextResolver {
     lease_store: DbLeaseStore,
     packet_store: PacketStore,
+    symbol_table: SymbolTable,
 }
 
 impl ContextResolver {
     pub fn open(db_path: impl AsRef<Path>, packet_tsv_path: impl AsRef<Path>) -> Result<Self, String> {
-        let lease_store = DbLeaseStore::open(db_path).map_err(|e| e.to_string())?;
+        let lease_store = DbLeaseStore::open(&db_path).map_err(|e| e.to_string())?;
         let packet_store = PacketStore::load(packet_tsv_path).map_err(|e| e.to_string())?;
+        let symbol_table = SymbolTable::open(db_path).map_err(|e| e.to_string())?;
         Ok(Self {
             lease_store,
             packet_store,
+            symbol_table,
         })
     }
 
@@ -82,6 +86,31 @@ impl ContextResolver {
         results
     }
 
+    pub fn resolve_from_signature(&self, symbols: &[String]) -> Vec<ContextRecommendation> {
+        let mut results = Vec::new();
+        if let Ok(leases) = self.lease_store.list_all() {
+            for lease in leases {
+                if let Ok(lease_symbols) = self.symbol_table.get_lease_signature(&lease.id) {
+                    let overlap = calculate_overlap(symbols, &lease_symbols);
+                    if overlap > 0.0 {
+                        let base_score = self.calculate_lease_score(&lease);
+                        let final_score = (0.75 * base_score) + (0.25 * overlap);
+                        results.push(ContextRecommendation {
+                            lease_id: Some(lease.id.clone()),
+                            packet_name: None,
+                            confidence: overlap,
+                            estimated_tokens_saved: lease.tokens_saved / (lease.access_count.max(1)),
+                            reason: format!("{:.0}% symbol overlap with lease: {}", overlap * 100.0, lease.id),
+                            score: final_score,
+                        });
+                    }
+                }
+            }
+        }
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        results
+    }
+
     fn calculate_lease_score(&self, record: &DbLeaseRecord) -> f64 {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -105,4 +134,15 @@ impl ContextResolver {
 
         (0.40 * recency_score) + (0.30 * savings_score) + (0.30 * frequency_score)
     }
+}
+
+fn calculate_overlap(requested: &[String], actual: &[String]) -> f64 {
+    if requested.is_empty() { return 0.0; }
+    let mut matches = 0;
+    for req in requested {
+        if actual.contains(req) {
+            matches += 1;
+        }
+    }
+    matches as f64 / requested.len() as f64
 }

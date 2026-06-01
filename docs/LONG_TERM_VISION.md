@@ -1,9 +1,9 @@
 # Kosh Long-Term Roadmap: The Path to a Context OS
 
-## Phase 4: Context Planning (Composition Engine)
-*   **Goal**: Move from "Agent requests context" to "Kosh composes the minimal context".
-*   **Commands**: `kosh suggest`, `kosh context resolve`, `kosh lease recommend`.
-*   **KPI**: Elimination of "Exploratory Turns" and "Just-in-case" file reads.
+## Phase 4: Deterministic Context Planning (Composition Engine)
+*   **Goal**: Kosh *proves* the minimal context required for a task and composes it on-the-fly.
+*   **Commands**: `kosh suggest`, `kosh context resolve`, `kosh why`.
+*   **KPI**: 100% provable context selection based on symbol overlap and ROI.
 
 ## Phase 5: Fact Memory (MadCat Fact Engine)
 *   **Goal**: Persistent "Institutional Memory" for architectural decisions and agent discoveries.

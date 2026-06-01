@@ -57,10 +57,11 @@ pub struct DbLeaseRecord {
     pub access_count: u64,
     pub last_used: Option<u64>,
     pub tokens_saved: u64,
+    pub file_list: Vec<String>,
 }
 
 pub struct DbLeaseStore {
-    conn: Connection,
+    pub conn: Connection,
 }
 
 impl DbLeaseStore {
@@ -79,7 +80,8 @@ impl DbLeaseStore {
                 created_at INTEGER NOT NULL,
                 access_count INTEGER DEFAULT 0,
                 last_used INTEGER,
-                tokens_saved INTEGER DEFAULT 0
+                tokens_saved INTEGER DEFAULT 0,
+                file_list TEXT
             )",
             [],
         )?;
@@ -93,9 +95,10 @@ impl DbLeaseStore {
     }
 
     pub fn find_by_fingerprint(&self, hash: &str) -> rusqlite::Result<Option<DbLeaseRecord>> {
-        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved FROM leases WHERE fingerprint_hash = ? LIMIT 1")?;
+        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved, file_list FROM leases WHERE fingerprint_hash = ? LIMIT 1")?;
         let mut rows = stmt.query(params![hash])?;
         if let Some(row) = rows.next()? {
+            let file_list_raw: String = row.get(10).unwrap_or_default();
             Ok(Some(DbLeaseRecord {
                 id: row.get(0)?,
                 repo: row.get(1)?,
@@ -107,6 +110,7 @@ impl DbLeaseStore {
                 access_count: row.get(7)?,
                 last_used: row.get(8)?,
                 tokens_saved: row.get(9)?,
+                file_list: file_list_raw.split('|').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
             }))
         } else {
             Ok(None)
@@ -114,8 +118,9 @@ impl DbLeaseStore {
     }
 
     pub fn list_all(&self) -> rusqlite::Result<Vec<DbLeaseRecord>> {
-        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved FROM leases")?;
+        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved, file_list FROM leases")?;
         let rows = stmt.query_map([], |row| {
+            let file_list_raw: String = row.get(10).unwrap_or_default();
             Ok(DbLeaseRecord {
                 id: row.get(0)?,
                 repo: row.get(1)?,
@@ -127,6 +132,7 @@ impl DbLeaseStore {
                 access_count: row.get(7)?,
                 last_used: row.get(8)?,
                 tokens_saved: row.get(9)?,
+                file_list: file_list_raw.split('|').map(|s| s.to_string()).filter(|s| !s.is_empty()).collect(),
             })
         })?;
 
@@ -135,6 +141,16 @@ impl DbLeaseStore {
             results.push(row?);
         }
         Ok(results)
+    }
+
+    pub fn insert_lease(&self, record: &DbLeaseRecord) -> rusqlite::Result<()> {
+        let file_list_raw = record.file_list.join("|");
+        self.conn.execute(
+            "INSERT INTO leases (id, repo, feature, fingerprint_hash, summary, byte_size, created_at, file_list) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![record.id, record.repo, record.feature, record.fingerprint_hash, record.summary, record.byte_size, record.created_at, file_list_raw],
+        )?;
+        Ok(())
     }
 
     pub fn record_hit(&self, id: &str, tokens: u64) -> rusqlite::Result<()> {
@@ -176,9 +192,9 @@ mod tests {
     fn db_store_records_hits() -> rusqlite::Result<()> {
         let store = DbLeaseStore::open(":memory:")?;
         store.conn.execute(
-            "INSERT INTO leases (id, repo, feature, fingerprint_hash, byte_size, created_at) 
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params!["lease:auth:001", "kosh", "auth", "hash123", 1000, 0],
+            "INSERT INTO leases (id, repo, feature, fingerprint_hash, byte_size, created_at, file_list) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params!["lease:auth:001", "kosh", "auth", "hash123", 1000, 0, "src/auth.rs"],
         )?;
 
         store.record_hit("lease:auth:001", 250)?;

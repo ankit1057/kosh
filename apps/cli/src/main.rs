@@ -20,7 +20,9 @@ use mcp_router::{
     resolve_symbol_alias, McpAlias, SymbolAlias,
 };
 use context_signatures::{ContextSignature, SignatureStore};
-use packet_engine::{PacketRecord, PacketStore};
+use fact_engine::{FactRecord, FactStore};
+use mcp_proxy::{extract_method, is_cacheable, is_notification, ProxyCache, ProxyStats};
+use packet_engine::{load_symbol_aliases as load_sym_alias_map, PacketRecord, PacketStore};
 use rusqlite::{params, Error as RusqliteError};
 use skill_engine::{SkillAction, SkillRecord, SkillStore};
 use symbol_extractor::{DartExtractor, RustExtractor, SymbolRecord, SymbolTable};
@@ -82,6 +84,10 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "batch" => handle_batch(&args[1..]),
         "packet" => handle_packet(&args[1..]),
         "signature" | "sig" => handle_signature(&args[1..]),
+        "fact" => handle_fact(&args[1..]),
+        "suggest" => handle_suggest(&args[1..]),
+        "benchmark" | "bench" => handle_benchmark(&args[1..]),
+        "mcp-proxy" => handle_mcp_proxy(&args[1..]),
         "skill" => handle_skill(&args[1..]),
         "symbols" => handle_symbols(&args[1..]),
         "serve" => handle_serve(&args[1..]),
@@ -381,13 +387,28 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
                 .ok_or_else(|| "usage: rtk context signature <lease_id>".to_string())?;
             let table = SymbolTable::open(cfg_path("kosh.db")).map_err(format_db_error)?;
             let symbols = table.get_lease_signature(lease_id).map_err(format_db_error)?;
+            let meta = table.get_signature_metadata(lease_id).map_err(format_db_error)?;
 
+            println!("Lease:");
             println!("{lease_id}");
-            println!("\nsymbols:");
+
+            println!("\nSymbols:");
             for sym in &symbols {
                 println!("- {sym}");
             }
-            println!("\ncount: {}", symbols.len());
+
+            if let Some((hash, version, count)) = meta {
+                println!("\nSignature Hash:");
+                println!("{hash}");
+                println!("\nVersion:");
+                println!("{version}");
+                println!("\nSymbol Count:");
+                println!("{count}");
+            } else {
+                println!("\nSymbol Count:");
+                println!("{}", symbols.len());
+            }
+
             Ok(ExitCode::SUCCESS)
         }
         "extract" => {
@@ -403,7 +424,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
                 .find(|l| l.id == *lease_id)
                 .ok_or_else(|| format!("lease not found: {lease_id}"))?;
 
-            let mut extracted_count = 0;
+            let mut all_symbols = Vec::new();
             for file_path in &lease.file_list {
                 if let Ok(source) = fs::read_to_string(file_path) {
                     let symbols = if file_path.ends_with(".dart") {
@@ -420,18 +441,28 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
                             kind,
                             file_path: file_path.clone(),
                             repo: lease.repo.clone(),
-                            content_hash: "TODO".to_string(), // In a real system, we'd hash the symbol content
+                            content_hash: "TODO".to_string(),
                         };
                         let sym_id = symbol_table.insert_symbol(&record).map_err(format_db_error)?;
                         symbol_table
                             .associate_lease(&lease.id, sym_id)
                             .map_err(format_db_error)?;
-                        extracted_count += 1;
+                        all_symbols.push(name);
                     }
                 }
             }
 
-            println!("Extracted {extracted_count} symbols for lease {lease_id}");
+            let hash = symbol_extractor::compute_signature_hash(&all_symbols);
+            symbol_table
+                .upsert_signature(&lease.id, &hash, all_symbols.len())
+                .map_err(format_db_error)?;
+
+            println!(
+                "Extracted {} symbols for lease {}. Signature: {}",
+                all_symbols.len(),
+                lease_id,
+                hash
+            );
             Ok(ExitCode::SUCCESS)
         }
         _ => Err("usage: rtk context <resolve|suggest|explain|signature|extract>".to_string()),
@@ -1399,6 +1430,295 @@ fn handle_signature(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+// ── Fact ──────────────────────────────────────────────────────────────────────
+
+const FACTS_FILE: &str = "facts.tsv";
+
+fn handle_fact(args: &[String]) -> Result<ExitCode, String> {
+    let sub = args.first().map(String::as_str).unwrap_or("");
+    let path = std::path::PathBuf::from(cfg_path(FACTS_FILE));
+
+    match sub {
+        "create" => {
+            let mut repo     = current_repo_name();
+            let mut feature  = current_feature_name();
+            let mut fact     = String::new();
+            let mut confidence: f32 = 0.9;
+            let mut source   = String::from("manual");
+            let mut symbols: Vec<String> = Vec::new();
+
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--repo"       => { i += 1; if i < args.len() { repo = args[i].clone(); } }
+                    "--feature"    => { i += 1; if i < args.len() { feature = args[i].clone(); } }
+                    "--fact"       => { i += 1; if i < args.len() { fact = args[i].clone(); } }
+                    "--confidence" => { i += 1; if i < args.len() { confidence = args[i].parse().unwrap_or(0.9); } }
+                    "--source"     => { i += 1; if i < args.len() { source = args[i].clone(); } }
+                    "--symbol"     => { i += 1; if i < args.len() { symbols.push(args[i].clone()); } }
+                    _ => { if fact.is_empty() { fact = args[i].clone(); } }
+                }
+                i += 1;
+            }
+            if fact.is_empty() {
+                return Err("usage: kosh fact create --fact \"<text>\" [--confidence 0.9] [--source <src>] [--symbol @sym]".into());
+            }
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+            let mut store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            let counter = store.records().len() + 1;
+            let id = FactStore::make_id(&repo, &feature, counter);
+            let record = FactRecord { id: id.clone(), repo, feature, fact, confidence, source, symbols, created_at: now, access_count: 0 };
+            store.upsert(record);
+            store.save(&path).map_err(|e| e.to_string())?;
+            println!("{id}");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "list" => {
+            let store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            for r in store.records() {
+                println!("{}\t{:.2}\t{}\t{}", r.id, r.confidence, r.source, &r.fact[..r.fact.len().min(80)]);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "get" => {
+            let id = args.get(1).ok_or("usage: kosh fact get <id>")?;
+            let store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            match store.get(id) {
+                Some(r) => {
+                    println!("id:         {}", r.id);
+                    println!("fact:       {}", r.fact);
+                    println!("confidence: {:.2}", r.confidence);
+                    println!("source:     {}", r.source);
+                    println!("symbols:    {}", r.symbols.join(", "));
+                    println!("repo:       {}", r.repo);
+                    println!("feature:    {}", r.feature);
+                    println!("accessed:   {}", r.access_count);
+                }
+                None => { eprintln!("not found: {id}"); return Ok(ExitCode::from(1)); }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "search" => {
+            let query = args.get(1).ok_or("usage: kosh fact search <query>")?;
+            let store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            let hits = store.search(query);
+            if hits.is_empty() { println!("no results"); }
+            for r in hits {
+                println!("{}\t{:.2}\t{}", r.id, r.confidence, &r.fact[..r.fact.len().min(100)]);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "touch" => {
+            let id = args.get(1).ok_or("usage: kosh fact touch <id>")?;
+            let mut store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            if store.touch(id) { store.save(&path).map_err(|e| e.to_string())?; println!("ok"); }
+            else { eprintln!("not found: {id}"); return Ok(ExitCode::from(1)); }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "delete" => {
+            let id = args.get(1).ok_or("usage: kosh fact delete <id>")?;
+            let mut store = FactStore::load(&path).map_err(|e| e.to_string())?;
+            if store.delete(id) { store.save(&path).map_err(|e| e.to_string())?; println!("deleted {id}"); }
+            else { eprintln!("not found: {id}"); return Ok(ExitCode::from(1)); }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        _ => {
+            eprintln!("usage: kosh fact <create|list|get|search|touch|delete>");
+            Ok(ExitCode::from(1))
+        }
+    }
+}
+
+// ── Suggest ───────────────────────────────────────────────────────────────────
+
+fn handle_suggest(args: &[String]) -> Result<ExitCode, String> {
+    // kosh suggest --file <path> [--file <path>...] [--threshold 0.2]
+    // Finds signatures overlapping with the given files, then emits the
+    // packet load commands that would satisfy them most efficiently.
+    let mut files: Vec<String> = Vec::new();
+    let mut threshold: f32 = 0.2;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file"      => { i += 1; if i < args.len() { files.push(args[i].clone()); } }
+            "--threshold" => { i += 1; if i < args.len() { threshold = args[i].parse().unwrap_or(0.2); } }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if files.is_empty() {
+        return Err("usage: kosh suggest --file <path> [--file <path>...] [--threshold 0.2]".into());
+    }
+
+    let now     = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let query   = ContextSignature::new(current_repo_name(), "query", files.clone(), vec![], now);
+    let sig_path = std::path::PathBuf::from(cfg_path(SIGNATURES_FILE));
+    let sig_store = SignatureStore::load(&sig_path).map_err(|e| e.to_string())?;
+    let matches   = sig_store.find_overlapping(&query, threshold);
+
+    let pkt_path  = std::path::PathBuf::from(cfg_path("packets.tsv"));
+    let pkt_store = PacketStore::load(&pkt_path).map_err(|e| e.to_string())?;
+
+    let fact_path = std::path::PathBuf::from(cfg_path(FACTS_FILE));
+    let fact_store = FactStore::load(&fact_path).map_err(|e| e.to_string())?;
+
+    if matches.is_empty() && pkt_store.records().is_empty() {
+        println!("# No matching context found. Consider creating a packet:");
+        for f in &files { println!("#   kosh packet create --name <name> --file {f}"); }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("# Context suggestions for {} file(s):", files.len());
+    println!();
+
+    // Suggest packets whose files overlap with query
+    let sym_aliases = load_sym_alias_map(std::path::Path::new(&cfg_path("symbols.aliases")))
+        .unwrap_or_default();
+    for record in pkt_store.records() {
+        let (resolved, _) = PacketStore::resolve_symbols(record, &sym_aliases);
+        let overlap: Vec<_> = files.iter().filter(|f| resolved.contains(f)).collect();
+        if !overlap.is_empty() {
+            println!("kosh packet load {}  # covers {}/{} requested files",
+                record.name, overlap.len(), files.len());
+        }
+    }
+
+    // Suggest matching signatures
+    for (sig, score) in &matches {
+        println!("kosh signature touch {}  # overlap {:.0}% ({} files)",
+            sig.id, score * 100.0, sig.files.len());
+    }
+
+    // Suggest related facts
+    let related_facts: Vec<_> = files.iter()
+        .flat_map(|f| fact_store.search(f))
+        .collect();
+    if !related_facts.is_empty() {
+        println!();
+        println!("# Related facts:");
+        for fact in related_facts.iter().take(5) {
+            println!("#   [{:.2}] {} ({})", fact.confidence, &fact.fact[..fact.fact.len().min(80)], fact.source);
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+// ── Benchmark ─────────────────────────────────────────────────────────────────
+
+fn handle_benchmark(args: &[String]) -> Result<ExitCode, String> {
+    // kosh benchmark [--json] [--suite compression|leasing|packet|batching]
+    let json_out = args.iter().any(|a| a == "--json");
+    let suite_filter = args.iter().position(|a| a == "--suite")
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str);
+
+    let script = std::path::Path::new("agent_test/kosh_benchmarks.py");
+    if !script.exists() {
+        return Err("benchmark script not found: agent_test/kosh_benchmarks.py".into());
+    }
+
+    let mut cmd = Command::new("python3");
+    cmd.arg(script);
+    if let Some(suite) = suite_filter {
+        cmd.arg("--suite").arg(suite);
+    }
+
+    let out = cmd.output().map_err(|e| format!("failed to run benchmark: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    if json_out {
+        // Extract summary numbers from the Python output and emit JSON
+        let mut naive_tok = 0u64;
+        let mut kosh_tok  = 0u64;
+        let mut saved_tok = 0u64;
+        let mut saved_pct = 0.0f64;
+        let mut calls_saved = 0i64;
+        for line in stdout.lines() {
+            if line.contains("TOTAL") {
+                let nums: Vec<&str> = line.split_whitespace().collect();
+                if nums.len() >= 5 {
+                    naive_tok   = nums[1].replace(',', "").parse().unwrap_or(0);
+                    kosh_tok    = nums[2].replace(',', "").parse().unwrap_or(0);
+                    let saved_s = nums[3].replace([',', '+'], "");
+                    saved_tok   = saved_s.parse().unwrap_or(0);
+                    let pct_s   = nums[4].replace(['%', '+'], "");
+                    saved_pct   = pct_s.parse().unwrap_or(0.0);
+                    calls_saved = nums.last().and_then(|s| s.replace('+', "").parse().ok()).unwrap_or(0);
+                }
+            }
+        }
+        println!("{{\"naive_tokens\":{naive_tok},\"kosh_tokens\":{kosh_tok},\
+            \"saved_tokens\":{saved_tok},\"saved_pct\":{saved_pct:.1},\
+            \"calls_saved\":{calls_saved}}}");
+    } else {
+        print!("{stdout}");
+        if !stderr.is_empty() { eprint!("{stderr}"); }
+    }
+
+    if out.status.success() { Ok(ExitCode::SUCCESS) } else { Ok(ExitCode::from(1)) }
+}
+
+// ── MCP Proxy ─────────────────────────────────────────────────────────────────
+
+fn handle_mcp_proxy(_args: &[String]) -> Result<ExitCode, String> {
+    use std::io::{self, BufRead};
+
+    let stdin  = io::stdin();
+    let stdout = io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+
+    let mut cache = ProxyCache::new();
+    let mut stats = ProxyStats::new();
+
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        if line.is_empty() { continue; }
+
+        // Pass notifications through unchanged
+        if is_notification(&line) {
+            writeln!(out, "{line}").ok();
+            continue;
+        }
+
+        let method = extract_method(&line).unwrap_or_default();
+
+        if is_cacheable(&method) {
+            let key = mcp_proxy::CacheKey::from_message(&method, &line);
+            if let Some(cached) = cache.get(&key) {
+                // Cache hit — return stored response
+                stats.record_hit(cached.byte_size);
+                writeln!(out, "{}", cached.response).ok();
+                continue;
+            }
+            // Cache miss — forward to stdout for upstream, record for next time
+            // In real proxy mode we'd pipe to the upstream server process.
+            // Here we emit the request and expect the caller to feed back the response.
+            stats.record_miss();
+            writeln!(out, "{line}").ok();
+        } else {
+            // Non-cacheable — pass through
+            writeln!(out, "{line}").ok();
+        }
+    }
+
+    // Emit stats to stderr so they don't pollute the JSON-RPC stream
+    eprintln!("kosh mcp-proxy: hits={} misses={} rate={:.1}% bytes_avoided={}",
+        stats.cache_hits, stats.requests_intercepted - stats.cache_hits,
+        stats.hit_rate() * 100.0, stats.bytes_avoided);
+
+    Ok(ExitCode::SUCCESS)
 }
 
 fn handle_serve(_args: &[String]) -> Result<ExitCode, String> {

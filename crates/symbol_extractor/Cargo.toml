@@ -1,12 +1,15 @@
 [package]
-name = "context_resolver"
+name = "symbol_extractor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 cache_engine = { path = "../cache_engine" }
-packet_engine = { path = "../packet_engine" }
-symbol_extractor = { path = "../symbol_extractor" }
 rusqlite = { version = "0.32", features = ["bundled"] }
-serde = { version = "1.0", features = ["derive"] }
+tree-sitter = "0.25"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-dart = "0.2.0"
+streaming-iterator = "0.1.9"
