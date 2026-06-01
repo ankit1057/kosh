@@ -67,7 +67,7 @@ For every planned feature, we measure success strictly through token economics.
 * **Estimated MCP calls saved:** Collapses N serial calls into 1.
 * **Estimated file reads avoided:** N/A (makes reads concurrent instead of serial).
 * **Estimated latency reduction:** Saves N-1 LLM inference roundtrips (huge latency win).
-* **How success is measured:** `kosh gain` tracks "turns avoided" and calculates the associated history token savings.
+* **How success is measured:** `rtk gain` tracks "turns avoided" and calculates the associated history token savings.
 
 ### 2. Context Leasing (Handles)
 * **Estimated tokens saved:** 10k-100k+ tokens per turn by referencing `ctx:auth:14` instead of re-reading a file.

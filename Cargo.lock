@@ -15,7 +15,15 @@ name = "indexer"
 version = "0.1.0"
 
 [[package]]
-name = "kosh-cli"
+name = "mcp_router"
+version = "0.1.0"
+
+[[package]]
+name = "packet_engine"
+version = "0.1.0"
+
+[[package]]
+name = "rtk-cli"
 version = "0.1.0"
 dependencies = [
  "cache_engine",
@@ -23,15 +31,12 @@ dependencies = [
  "indexer",
  "mcp_router",
  "packet_engine",
+ "skill_engine",
  "tool_registry",
 ]
 
 [[package]]
-name = "mcp_router"
-version = "0.1.0"
-
-[[package]]
-name = "packet_engine"
+name = "skill_engine"
 version = "0.1.0"
 
 [[package]]

@@ -245,7 +245,7 @@ fn scan_dir(root: &Path, dir: &Path, files: &mut Vec<FileEntry>) -> io::Result<(
 fn should_skip_dir(name: &str) -> bool {
     matches!(
         name,
-        ".git" | ".kosh" | "target" | "node_modules" | ".dart_tool" | "build" | ".gradle"
+        ".git" | ".rtk" | "target" | "node_modules" | ".dart_tool" | "build" | ".gradle"
     )
 }
 

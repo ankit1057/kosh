@@ -38,15 +38,15 @@ The primary KPIs are strictly economic:
 
 ### Key Commands
 - **Build**: `cargo build`
-- **Run CLI**: `cargo run -p kosh-cli -- <subcommand>` 
+- **Run CLI**: `cargo run -p rtk-cli -- <subcommand>` 
 - **Test**: `cargo test`
 - **Format**: `cargo fmt --all`
 - **Check**: `cargo check`
 
 *(Note: The binary and commands now use `kosh`.)*
-- `kosh gain`: Show token/cost savings analytics.
-- `kosh index`: Scan repository and manage file inventory.
-- `kosh mcp expand "<alias> <arg>"`: Expand an MCP shorthand.
+- `rtk gain`: Show token/cost savings analytics.
+- `rtk index`: Scan repository and manage file inventory.
+- `rtk mcp expand "<alias> <arg>"`: Expand an MCP shorthand.
 
 ## Development Conventions
 

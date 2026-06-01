@@ -13,6 +13,8 @@ import re
 import subprocess
 import sys
 import time
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -251,12 +253,17 @@ def count_tokens(tokenizer, text: str) -> int:
     return len(tokenizer.encode(text))
 
 
+def _call_key(call: dict) -> str:
+    """Stable string key for dedup — tool name + sorted args."""
+    return json.dumps({"n": call.get("name"), "a": call.get("arguments", {})}, sort_keys=True)
+
+
 def run_agent(
     model,
     tokenizer,
     scenario_prompt: str,
     mode: str,
-    max_turns: int = 6,
+    max_turns: int = 8,
 ) -> ScenarioResult:
     tools  = tool_definitions(mode)
     system = system_for_mode(mode)
@@ -266,6 +273,8 @@ def run_agent(
     ]
     result = ScenarioResult(name="", mode=mode)
     t0 = time.time()
+    received_tool_results = False
+    seen_call_keys: set[str] = set()
 
     for _turn in range(max_turns):
         turn_stat = TurnStats()
@@ -278,15 +287,29 @@ def run_agent(
 
         tool_calls = parse_tool_calls(raw)
 
+        # Fix 2 — answer detection: no tool calls, OR already received results and model is done
         if not tool_calls:
-            # No tool call — agent produced final answer
             result.answer = raw.strip()
             result.turns.append(turn_stat)
             break
 
-        # Execute each tool call
-        messages.append({"role": "assistant", "content": raw})
+        # Fix 1 — dedup guard: drop any tool calls identical to a prior turn's calls
+        fresh_calls = []
         for call in tool_calls:
+            key = _call_key(call)
+            if key not in seen_call_keys:
+                seen_call_keys.add(key)
+                fresh_calls.append(call)
+
+        if not fresh_calls:
+            # All calls are repeats — model is looping; treat current output as final answer
+            result.answer = raw.strip()
+            result.turns.append(turn_stat)
+            break
+
+        # Execute fresh tool calls
+        messages.append({"role": "assistant", "content": raw})
+        for call in fresh_calls:
             fn_name = call.get("name", "")
             fn_args = call.get("arguments", {})
             if isinstance(fn_args, str):
@@ -297,13 +320,14 @@ def run_agent(
             turn_stat.tool_calls += 1
             result.tool_call_log.append({"tool": fn_name, "args": fn_args})
             tool_output = execute_tool(fn_name, fn_args, mode)[:3000]
-            # Qwen2.5 expects one tool message per call with name field
             messages.append({
                 "role": "tool",
                 "name": fn_name,
                 "content": tool_output,
             })
             turn_stat.tool_result_tokens += count_tokens(tokenizer, tool_output)
+
+        received_tool_results = True
         result.turns.append(turn_stat)
 
     result.elapsed_s = time.time() - t0
@@ -389,6 +413,11 @@ def run_kosh_gain():
 # ── Setup: seed packets and leases for kosh mode ──────────────────────────────
 def seed_kosh_context():
     print("Seeding Kosh context (packets + leases)...")
+    # Clear stale data from prior runs
+    for stale in [".kosh/leases.tsv", ".kosh/packets.tsv", ".kosh/history.tsv"]:
+        p = REPO_ROOT / stale
+        if p.exists():
+            p.unlink()
     # Create an 'arch' packet bundling all crate lib.rs files
     run_kosh("packet", "create",
         "--name", "arch",

@@ -10,9 +10,9 @@ pub struct LeaseRecord {
     pub feature: String,
     pub fingerprint: String,
     pub summary: String,
+    pub byte_size: u64,
     pub created_at: u64,
     pub access_count: u64,
-    pub byte_size: u64,
 }
 
 impl LeaseRecord {
@@ -22,8 +22,8 @@ impl LeaseRecord {
         feature: impl Into<String>,
         fingerprint: impl Into<String>,
         summary: impl Into<String>,
-        created_at: u64,
         byte_size: u64,
+        created_at: u64,
     ) -> Self {
         Self {
             id: id.into(),
@@ -31,23 +31,23 @@ impl LeaseRecord {
             feature: feature.into(),
             fingerprint: fingerprint.into(),
             summary: summary.into(),
+            byte_size,
             created_at,
             access_count: 0,
-            byte_size,
         }
     }
 
     pub fn to_compact_json(&self) -> String {
         format!(
-            "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"fingerprint\":\"{}\",\"summary\":\"{}\",\"created_at\":{},\"access_count\":{},\"byte_size\":{}}}",
+            "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"fingerprint\":\"{}\",\"summary\":\"{}\",\"byte_size\":{},\"created_at\":{},\"access_count\":{}}}",
             escape_json(&self.id),
             escape_json(&self.repo),
             escape_json(&self.feature),
             escape_json(&self.fingerprint),
             escape_json(&self.summary),
+            self.byte_size,
             self.created_at,
-            self.access_count,
-            self.byte_size
+            self.access_count
         )
     }
 }
@@ -106,8 +106,8 @@ impl ContextLeaseManager {
             feature,
             fingerprint,
             summary,
-            created_at,
             byte_size,
+            created_at,
         );
         self.records.push(record.clone());
         record
@@ -151,15 +151,15 @@ impl ContextLeaseManager {
             let feature = unescape_field(fields[2])?;
             let fingerprint = unescape_field(fields[3])?;
             let summary = unescape_field(fields[4])?;
-            let created_at = fields[5]
-                .parse::<u64>()
-                .map_err(|error| format!("line {}: invalid created_at: {error}", index + 1))?;
-            let access_count = fields[6]
-                .parse::<u64>()
-                .map_err(|error| format!("line {}: invalid access_count: {error}", index + 1))?;
-            let byte_size = fields[7]
+            let byte_size = fields[5]
                 .parse::<u64>()
                 .map_err(|error| format!("line {}: invalid byte_size: {error}", index + 1))?;
+            let created_at = fields[6]
+                .parse::<u64>()
+                .map_err(|error| format!("line {}: invalid created_at: {error}", index + 1))?;
+            let access_count = fields[7]
+                .parse::<u64>()
+                .map_err(|error| format!("line {}: invalid access_count: {error}", index + 1))?;
 
             let mut record = LeaseRecord::new(
                 id.clone(),
@@ -167,8 +167,8 @@ impl ContextLeaseManager {
                 feature.clone(),
                 fingerprint,
                 summary,
-                created_at,
                 byte_size,
+                created_at,
             );
             record.access_count = access_count;
             manager.records.push(record);
@@ -205,11 +205,11 @@ impl ContextLeaseManager {
             output.push('\t');
             output.push_str(&escape_field(&record.summary));
             output.push('\t');
+            output.push_str(&record.byte_size.to_string());
+            output.push('\t');
             output.push_str(&record.created_at.to_string());
             output.push('\t');
             output.push_str(&record.access_count.to_string());
-            output.push('\t');
-            output.push_str(&record.byte_size.to_string());
             output.push('\n');
         }
 

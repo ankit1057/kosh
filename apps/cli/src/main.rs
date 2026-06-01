@@ -18,18 +18,17 @@ use mcp_router::{
     resolve_symbol_alias, McpAlias, SymbolAlias,
 };
 use packet_engine::{PacketRecord, PacketStore};
+use skill_engine::{SkillAction, SkillRecord, SkillStore};
 use tool_registry::{default_aliases, expand_command, parse_aliases, CommandAlias};
 
 fn config_dir() -> &'static str {
     use std::sync::OnceLock;
     static DIR: OnceLock<&'static str> = OnceLock::new();
     DIR.get_or_init(|| {
-        if std::path::Path::new(".kosh").exists() {
-            ".kosh"
-        } else if std::path::Path::new(".rtk").exists() {
+        if std::path::Path::new(".rtk").exists() {
             ".rtk"
         } else {
-            ".kosh"
+            ".rtk"
         }
     })
 }
@@ -37,6 +36,7 @@ fn config_dir() -> &'static str {
 fn cfg_path(name: &str) -> String {
     format!("{}/{}", config_dir(), name)
 }
+
 const BLENDED_COST_PER_TOKEN: f64 = 0.00001;
 
 fn main() -> ExitCode {
@@ -63,7 +63,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         "--version" | "-V" => {
-            println!("kosh {}", env!("CARGO_PKG_VERSION"));
+            println!("rtk {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
         }
         "gain" => handle_gain(&args[1..]),
@@ -75,7 +75,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "lease" => handle_lease(&args[1..]),
         "batch" => handle_batch(&args[1..]),
         "packet" => handle_packet(&args[1..]),
+        "skill" => handle_skill(&args[1..]),
         "symbols" => handle_symbols(&args[1..]),
+        "serve" => handle_serve(&args[1..]),
         "proxy" => execute_raw(&args[1..]),
         _ => execute_expanded(&args),
     }
@@ -83,20 +85,20 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
 
 fn print_help() {
     println!(
-        "kosh <alias|command> [args...]\n\
+        "rtk <alias|command> [args...]\n\
          \n\
          Examples:\n\
-           kosh gs\n\
-           kosh config init\n\
-           kosh mcp expand \"rf @authrepo\"\n\
-           kosh symbols put @authrepo src/auth.rs\n\
-           kosh lease create --repo kosh --feature auth --fingerprint xyz --summary \"Auth context\"\n\
-           kosh lease touch lease:auth:001\n\
-           kosh packet create --name auth --file src/auth.rs --symbol @authrepo\n\
-           kosh packet load auth\n\
-           kosh batch '[{{\"tool\":\"read_file\",\"path\":\"Cargo.toml\"}}]'\n\
-           kosh index\n\
-           kosh gain --history"
+           rtk gs\n\
+           rtk config init\n\
+           rtk mcp expand \"rf @authrepo\"\n\
+           rtk symbols put @authrepo src/auth.rs\n\
+           rtk lease create --repo kosh --feature auth --fingerprint xyz --summary \"Auth context\"\n\
+           rtk lease touch lease:auth:001\n\
+           rtk packet create --name auth --file src/auth.rs --symbol @authrepo\n\
+           rtk packet load auth\n\
+           rtk batch '[{{\"tool\":\"read_file\",\"path\":\"Cargo.toml\"}}]'\n\
+           rtk index\n\
+           rtk gain --history"
     );
 }
 
@@ -130,7 +132,7 @@ fn handle_index(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh index [--json|write|diff [--json]]".to_string()),
+        _ => Err("usage: rtk index [--json|write|diff [--json]]".to_string()),
     }
 }
 
@@ -243,85 +245,84 @@ fn print_history(records: &[CompressionRecord]) {
 }
 
 fn print_history_json(records: &[CompressionRecord]) {
-    print!("[");
-    for (index, record) in records.iter().rev().take(20).rev().enumerate() {
-        if index > 0 {
-            print!(",");
-        }
-        print!("{}", record.to_compact_json());
-    }
-    println!("]");
+    let items = records
+        .iter()
+        .map(|r| r.to_compact_json())
+        .collect::<Vec<_>>()
+        .join(",");
+    println!("[{items}]");
 }
 
 fn handle_expand(args: &[String]) -> Result<ExitCode, String> {
-    if args.is_empty() {
-        return Err("usage: kosh expand <alias|command> [args...]".to_string());
-    }
-
+    let input = args.join(" ");
     let aliases = load_command_aliases()?;
-    let expanded = expand_command(args, &aliases);
-    let compact = args.join(" ");
-    let expanded = expanded.join(" ");
-    maybe_record_compression("cmd-preview", &compact, &expanded, "preview")?;
+    let expanded = expand_command(args, &aliases).join(" ");
+
     println!("{expanded}");
+    maybe_record_compression("cmd-preview", "ok", &input, &expanded, "ok")?;
     Ok(ExitCode::SUCCESS)
 }
 
 fn handle_mcp(args: &[String]) -> Result<ExitCode, String> {
-    if args.first().map(String::as_str) != Some("expand") {
-        return Err("usage: kosh mcp expand \"rf @symbol\"".to_string());
+    match args.first().map(String::as_str) {
+        Some("expand") => {
+            let input = args[1..].join(" ");
+            let expanded = expand_mcp_alias_with_symbols(&input)?;
+            let json = expanded.to_compact_json();
+            println!("{json}");
+            maybe_record_compression("mcp", "ok", &input, &json, "ok")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("list") => {
+            let aliases = load_mcp_aliases()?;
+            for alias in aliases {
+                println!("{} => {} {}", alias.alias, alias.tool, alias.argument_name);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err("usage: rtk mcp <expand|list>".to_string()),
     }
-
-    let input = args[1..].join(" ");
-    let aliases = load_mcp_aliases()?;
-    let mut expanded = expand_mcp_alias(&input, &aliases)?;
-    let symbol_aliases = load_symbol_aliases()?;
-    expanded.argument_value = resolve_symbol_alias(&expanded.argument_value, &symbol_aliases);
-    let compact = input;
-    let expanded_json = expanded.to_compact_json();
-    maybe_record_compression("mcp", &compact, &expanded_json, "ok")?;
-    println!("{expanded_json}");
-    Ok(ExitCode::SUCCESS)
 }
 
 fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
     match args.first().map(String::as_str) {
         Some("fingerprint") => {
-            let fingerprint = fingerprint_from_flags(args)?;
-            println!("{}", fingerprint.key());
+            let repo = flag_value(args, "--repo")?;
+            let feature = flag_value(args, "--feature")?;
+            let hash = flag_value(args, "--hash")?;
+            let fingerprint = ContextFingerprint::new(repo, feature, hash);
             println!("{}", fingerprint.to_compact_json());
             Ok(ExitCode::SUCCESS)
         }
         Some("put") => {
-            let fingerprint = fingerprint_from_flags(args)?;
+            let repo = flag_value(args, "--repo")?;
+            let feature = flag_value(args, "--feature")?;
+            let hash = flag_value(args, "--hash")?;
             let summary = flag_value(args, "--summary")?;
-            let mut cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
-            let record = CacheRecord::new(fingerprint, summary);
-            let key = record.key();
-            cache.upsert(record);
-            cache.save(&cfg_path("cache.tsv")).map_err(format_io)?;
-            println!("{key}");
+
+            let mut cache = ContextCache::load(cfg_path("cache.tsv")).map_err(format_io)?;
+            let fingerprint = ContextFingerprint::new(repo, feature, hash);
+            cache.upsert(CacheRecord::new(fingerprint, summary));
+            cache.save(cfg_path("cache.tsv")).map_err(format_io)?;
             Ok(ExitCode::SUCCESS)
         }
         Some("get") => {
             let key = args
                 .get(1)
-                .ok_or_else(|| "usage: kosh cache get <key>".to_string())?;
-            let cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
-            let Some(record) = cache.get(key) else {
-                return Err(format!("cache miss: {key}"));
-            };
+                .ok_or_else(|| "usage: rtk cache get <repo:feature:hash>".to_string())?;
+            let cache = ContextCache::load(cfg_path("cache.tsv")).map_err(format_io)?;
+            let record = cache.get(key).ok_or_else(|| format!("cache miss: {key}"))?;
             println!("{}", record.to_compact_json());
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
-            let cache = ContextCache::load(&cfg_path("cache.tsv")).map_err(format_io)?;
+            let cache = ContextCache::load(cfg_path("cache.tsv")).map_err(format_io)?;
             for record in cache.records() {
                 println!("{}", record.to_compact_json());
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh cache <fingerprint|put|get|list>".to_string()),
+        _ => Err("usage: rtk cache <fingerprint|put|get|list>".to_string()),
     }
 }
 
@@ -336,7 +337,6 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or_else(|| {
-                    // Try to get current repo size as a default
                     load_index_snapshot()
                         .map(|snapshot| snapshot.summary().bytes)
                         .unwrap_or(20_000)
@@ -352,7 +352,7 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
         Some("get") => {
             let id = args
                 .get(1)
-                .ok_or_else(|| "usage: kosh lease get <id>".to_string())?;
+                .ok_or_else(|| "usage: rtk lease get <id>".to_string())?;
             let manager = ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
             let lease = manager.get(id).ok_or_else(|| format!("lease miss: {id}"))?;
             println!("{}", lease.to_compact_json());
@@ -361,23 +361,9 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
         Some("touch") => {
             let id = args
                 .get(1)
-                .ok_or_else(|| "usage: kosh lease touch <id>".to_string())?;
-            let mut manager =
-                ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
-
-            let lease = manager
-                .touch(id)
-                .ok_or_else(|| format!("lease miss: {id}"))?;
-            let byte_size = lease.byte_size;
-            let lease_json = lease.to_compact_json();
-
-            let compact = format!("lease:{}", id);
-            let expanded_dummy = "a".repeat(byte_size as usize);
-
-            maybe_record_compression("lease_hit", &compact, &expanded_dummy, "ok")?;
-
-            manager.save(&cfg_path("leases.tsv")).map_err(format_io)?;
-            println!("{}", lease_json);
+                .ok_or_else(|| "usage: rtk lease touch <id>".to_string())?;
+            let json = touch_lease_logic(id)?;
+            println!("{}", json);
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
@@ -397,8 +383,24 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh lease <create|get|list|touch|stats>".to_string()),
+        _ => Err("usage: rtk lease <create|get|list|touch|stats>".to_string()),
     }
+}
+
+fn touch_lease_logic(id: &str) -> Result<String, String> {
+    let mut manager = ContextLeaseManager::load(&cfg_path("leases.tsv")).map_err(format_io)?;
+    let lease = manager
+        .touch(id)
+        .ok_or_else(|| format!("lease miss: {id}"))?;
+    let byte_size = lease.byte_size;
+    let lease_json = lease.to_compact_json();
+
+    let compact = format!("lease:{}", id);
+    let expanded_dummy = "a".repeat(byte_size as usize);
+    maybe_record_compression("lease_hit", "ok", &compact, &expanded_dummy, "ok")?;
+
+    manager.save(&cfg_path("leases.tsv")).map_err(format_io)?;
+    Ok(lease_json)
 }
 
 fn handle_config(args: &[String]) -> Result<ExitCode, String> {
@@ -411,7 +413,7 @@ fn handle_config(args: &[String]) -> Result<ExitCode, String> {
             println!("created {} config", config_dir());
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh config init".to_string()),
+        _ => Err("usage: rtk config init".to_string()),
     }
 }
 
@@ -420,10 +422,10 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
         Some("put") => {
             let symbol = args
                 .get(1)
-                .ok_or_else(|| "usage: kosh symbols put <@symbol> <value>".to_string())?;
+                .ok_or_else(|| "usage: rtk symbols put <@symbol> <value>".to_string())?;
             let value = args
                 .get(2)
-                .ok_or_else(|| "usage: kosh symbols put <@symbol> <value>".to_string())?;
+                .ok_or_else(|| "usage: rtk symbols put <@symbol> <value>".to_string())?;
             let alias = SymbolAlias::new(symbol, value)?;
             let mut aliases = load_symbol_aliases()?;
             aliases.retain(|candidate| candidate.symbol != alias.symbol);
@@ -435,7 +437,7 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
         Some("get") => {
             let symbol = args
                 .get(1)
-                .ok_or_else(|| "usage: kosh symbols get <@symbol>".to_string())?;
+                .ok_or_else(|| "usage: rtk symbols get <@symbol>".to_string())?;
             let aliases = load_symbol_aliases()?;
             let resolved = resolve_symbol_alias(symbol, &aliases);
             if resolved == *symbol {
@@ -447,38 +449,35 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
         Some("list") => {
             let aliases = load_symbol_aliases()?;
             for alias in aliases {
-                println!("{} => {}", alias.symbol, alias.value);
+                println!("{}\t{}", alias.symbol, alias.value);
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh symbols <put|get|list>".to_string()),
+        _ => Err("usage: rtk symbols <put|get|list>".to_string()),
     }
 }
 
-fn fingerprint_from_flags(args: &[String]) -> Result<ContextFingerprint, String> {
-    let repo = flag_value(args, "--repo")?;
-    let feature = flag_value(args, "--feature")?;
-    let hash = flag_value(args, "--hash")?;
-    Ok(ContextFingerprint::new(repo, feature, hash))
-}
-
 fn flag_value(args: &[String], flag: &str) -> Result<String, String> {
-    args.windows(2)
-        .find(|pair| pair[0] == flag)
-        .map(|pair| pair[1].clone())
+    args.iter()
+        .position(|arg| arg == flag)
+        .and_then(|index| args.get(index + 1))
+        .map(|value| value.to_string())
         .ok_or_else(|| format!("missing {flag}"))
 }
 
 fn execute_expanded(args: &[String]) -> Result<ExitCode, String> {
+    let input = args.join(" ");
     let aliases = load_command_aliases()?;
-    let expanded = expand_command(args, &aliases);
-    let compact = args.join(" ");
-    let expanded_text = expanded.join(" ");
-    let exit_code = execute_raw_code(&expanded)?;
+    let expanded = expand_command(args, &aliases).join(" ");
+
+    let parts: Vec<String> = expanded.split_whitespace().map(|s| s.to_string()).collect();
+    let exit_code = execute_raw_code(&parts)?;
+
     maybe_record_compression(
         "cmd",
-        &compact,
-        &expanded_text,
+        "ok",
+        &input,
+        &expanded,
         &format!("exit:{exit_code}"),
     )?;
     Ok(ExitCode::from(exit_code as u8))
@@ -535,7 +534,7 @@ fn load_symbol_aliases() -> Result<Vec<SymbolAlias>, String> {
 fn save_symbol_aliases(aliases: &[SymbolAlias]) -> Result<(), String> {
     fs::create_dir_all(config_dir()).map_err(format_io)?;
     let mut contents = String::new();
-    contents.push_str("# KOSH symbol aliases.\n");
+    contents.push_str("# RTK symbol aliases.\n");
     contents.push_str("# Format: <@symbol> => <value>\n");
     for alias in aliases {
         contents.push_str(&alias.symbol);
@@ -561,9 +560,10 @@ fn format_io(error: std::io::Error) -> String {
 
 fn maybe_record_compression(
     kind: &str,
+    status: &str,
     compact: &str,
     expanded: &str,
-    status: &str,
+    _meta: &str,
 ) -> Result<(), String> {
     let record = CompressionRecord::with_metadata(
         current_timestamp_seconds(),
@@ -589,8 +589,7 @@ fn maybe_record_compression(
 }
 
 fn current_repo_name() -> String {
-    env::var("KOSH_REPO")
-        .or_else(|_| env::var("RTK_REPO"))
+    env::var("RTK_REPO")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
@@ -606,8 +605,7 @@ fn current_repo_name() -> String {
 }
 
 fn current_feature_name() -> String {
-    env::var("KOSH_FEATURE")
-        .or_else(|_| env::var("RTK_FEATURE"))
+    env::var("RTK_FEATURE")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "default".to_string())
@@ -845,11 +843,11 @@ fn handle_batch(args: &[String]) -> Result<ExitCode, String> {
     let json_input: String = if args.first().map(String::as_str) == Some("--file") {
         let path = args
             .get(1)
-            .ok_or_else(|| "usage: kosh batch --file <path>".to_string())?;
+            .ok_or_else(|| "usage: rtk batch --file <path>".to_string())?;
         fs::read_to_string(path).map_err(format_io)?
     } else if args.is_empty() {
         return Err(
-            "usage: kosh batch '<json-array>'\n       kosh batch --file <path>".to_string(),
+            "usage: rtk batch '<json-array>'\n       rtk batch --file <path>".to_string(),
         );
     } else {
         args.join(" ")
@@ -889,7 +887,7 @@ fn handle_batch(args: &[String]) -> Result<ExitCode, String> {
     };
 
     let expanded = result_lines.join("\n");
-    maybe_record_compression("mcp_batch", &json_input, &expanded, overall_status)?;
+    maybe_record_compression("mcp_batch", "ok", &json_input, &expanded, overall_status)?;
 
     Ok(ExitCode::SUCCESS)
 }
@@ -904,7 +902,7 @@ fn load_index_snapshot() -> Result<IndexSnapshot, String> {
     IndexSnapshot::from_tsv(&contents)
 }
 
-const DEFAULT_COMMAND_ALIAS_CONFIG: &str = r#"# KOSH command aliases.
+const DEFAULT_COMMAND_ALIAS_CONFIG: &str = r#"# RTK command aliases.
 # Format: <alias> => <expansion>
 #
 # These examples duplicate built-ins so the format is visible.
@@ -914,14 +912,14 @@ gl => git log --oneline -20
 dart files => find . -name *.dart
 "#;
 
-const DEFAULT_MCP_ALIAS_CONFIG: &str = r#"# KOSH MCP aliases.
+const DEFAULT_MCP_ALIAS_CONFIG: &str = r#"# RTK MCP aliases.
 # Format: <alias> => <tool> <argument_name>
 rf => read_file path
 sf => search_files query
 ls => list_directory path
 "#;
 
-const DEFAULT_SYMBOL_ALIAS_CONFIG: &str = r#"# KOSH symbol aliases.
+const DEFAULT_SYMBOL_ALIAS_CONFIG: &str = r#"# RTK symbol aliases.
 # Format: <@symbol> => <value>
 #
 # @authrepo => lib/features/auth/data/repositories/auth_repository_impl.dart
@@ -957,7 +955,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             }
 
             let name = name.ok_or(
-                "kosh packet create --name <name> [--file <path>]... [--symbol <@sym>]...",
+                "rtk packet create --name <name> [--file <path>]... [--symbol <@sym>]...",
             )?;
             let ts = current_timestamp_seconds();
             let record = PacketRecord::new(&name, files, symbols, ts);
@@ -968,34 +966,16 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             store.save(&cfg_path("packets.tsv")).map_err(format_io)?;
 
             println!("{json}");
-            maybe_record_compression("packet_create", &name, &json, "ok")?;
+            maybe_record_compression("packet_create", "ok", &name, &json, "ok")?;
             Ok(ExitCode::SUCCESS)
         }
 
         "load" => {
-            let name = args.get(1).ok_or("kosh packet load <name>")?;
-
-            let store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
-            let record = store.get(name).ok_or(format!("packet not found: {name}"))?;
-
-            let mut calls: Vec<String> = Vec::new();
-            for path in &record.files {
-                calls.push(format!(
-                    "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
-                    json_escape(path)
-                ));
-            }
-            for sym in &record.symbols {
-                let resolved = resolve_symbol_alias(sym, &load_symbol_aliases()?);
-                calls.push(format!(
-                    "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
-                    json_escape(&resolved)
-                ));
-            }
-
-            let batch_json = format!("[{}]", calls.join(","));
-            println!("{batch_json}");
-            maybe_record_compression("packet_load", name, &batch_json, "ok")?;
+            let name = args
+                .get(1)
+                .ok_or_else(|| "usage: rtk packet load <name>".to_string())?;
+            let json = load_packet_as_batch(name)?;
+            println!("{}", json);
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1013,7 +993,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         }
 
         "delete" => {
-            let name = args.get(1).ok_or("kosh packet delete <name>")?;
+            let name = args.get(1).ok_or("rtk packet delete <name>")?;
 
             let mut store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             if store.delete(name) {
@@ -1025,8 +1005,253 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             }
         }
 
-        _ => Err("usage: kosh packet <create|load|list|delete>".to_string()),
+        _ => Err("usage: rtk packet <create|load|list|delete>".to_string()),
     }
+}
+
+fn load_packet_as_batch(name: &str) -> Result<String, String> {
+    let store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
+    let record = store.get(name).ok_or(format!("packet not found: {name}"))?;
+
+    let mut calls: Vec<String> = Vec::new();
+    for path in &record.files {
+        calls.push(format!(
+            "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
+            json_escape(path)
+        ));
+    }
+    for sym in &record.symbols {
+        let resolved = resolve_symbol_alias(sym, &load_symbol_aliases()?);
+        calls.push(format!(
+            "{{\"tool\":\"read_file\",\"path\":\"{}\"}}",
+            json_escape(&resolved)
+        ));
+    }
+
+    let batch_json = format!("[{}]", calls.join(","));
+    maybe_record_compression("packet_load", "ok", name, &batch_json, "ok")?;
+    Ok(batch_json)
+}
+
+fn handle_skill(args: &[String]) -> Result<ExitCode, String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+
+    match subcommand {
+        "create" => {
+            let mut name: Option<String> = None;
+            let mut description: Option<String> = None;
+            let mut actions: Vec<SkillAction> = Vec::new();
+
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--name" => {
+                        i += 1;
+                        name = Some(args.get(i).ok_or("--name requires a value")?.clone());
+                    }
+                    "--desc" => {
+                        i += 1;
+                        description = Some(args.get(i).ok_or("--desc requires a value")?.clone());
+                    }
+                    "--cmd" => {
+                        i += 1;
+                        actions.push(SkillAction::new(
+                            "cmd",
+                            args.get(i).ok_or("--cmd requires a value")?.clone(),
+                        ));
+                    }
+                    "--mcp" => {
+                        i += 1;
+                        actions.push(SkillAction::new(
+                            "mcp",
+                            args.get(i).ok_or("--mcp requires a value")?.clone(),
+                        ));
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            let name = name.ok_or("rtk skill create --name <name> --desc <description> [--cmd <cmd>]... [--mcp <mcp>]...")?;
+            let description = description.unwrap_or_default();
+
+            let mut store = SkillStore::load(&cfg_path("skills.tsv")).map_err(format_io)?;
+            let record = SkillRecord::new(name.clone(), description, actions);
+            let json = record.to_compact_json();
+            store.upsert(record);
+            store.save(&cfg_path("skills.tsv")).map_err(format_io)?;
+
+            println!("{json}");
+            maybe_record_compression("skill_create", "ok", &name, &json, "ok")?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "run" => {
+            let name = args
+                .get(1)
+                .ok_or_else(|| "usage: rtk skill run <name>".to_string())?;
+            let report = run_skill_logic(name)?;
+            println!("{}", report);
+            Ok(ExitCode::SUCCESS)
+        }
+
+        "list" => {
+            let store = SkillStore::load(&cfg_path("skills.tsv")).map_err(format_io)?;
+            for record in store.records() {
+                println!(
+                    "{}\tdesc={}\tactions={}",
+                    record.name,
+                    record.description,
+                    record.actions.len()
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        _ => Err("usage: rtk skill <create|run|list>".to_string()),
+    }
+}
+
+fn run_skill_logic(name: &str) -> Result<String, String> {
+    let store = SkillStore::load(&cfg_path("skills.tsv")).map_err(format_io)?;
+    let record = store.get(name).ok_or(format!("skill not found: {name}"))?;
+
+    let mut expanded_lines = Vec::new();
+    for action in &record.actions {
+        match action.kind.as_str() {
+            "cmd" => {
+                println!("> {}", action.value);
+                let parts: Vec<String> = action
+                    .value
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+                execute_expanded(&parts)?;
+                expanded_lines.push(action.value.clone());
+            }
+            "mcp" => {
+                let expanded = expand_mcp_alias_with_symbols(&action.value)?;
+                let json = expanded.to_compact_json();
+                expanded_lines.push(json);
+            }
+            _ => {}
+        }
+    }
+
+    let expanded = expanded_lines.join("\n");
+    maybe_record_compression("skill_run", "ok", name, &expanded, "ok")?;
+    Ok(expanded)
+}
+
+fn handle_serve(_args: &[String]) -> Result<ExitCode, String> {
+    use std::io::{self, BufRead};
+
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(format_io)?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let id = json_str_field(&line, "id")
+            .or_else(|| json_num_field(&line, "id"))
+            .unwrap_or("null");
+
+        if line.contains("\"method\":\"initialize\"") {
+            println!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"serverInfo\":{{\"name\":\"kosh\",\"version\":\"0.1.0\"}}}}}}", id);
+        } else if line.contains("\"method\":\"listTools\"") {
+            println!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"tools\":[
+                {{\"name\":\"batch\",\"description\":\"Execute a batch of MCP calls\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{{\"batch\":{{\"type\":\"string\",\"description\":\"JSON array of MCP calls\"}}}},\"required\":[\"batch\"]}}}},
+                {{\"name\":\"packet_load\",\"description\":\"Load a context packet\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{{\"name\":{{\"type\":\"string\"}}}},\"required\":[\"name\"]}}}},
+                {{\"name\":\"lease_touch\",\"description\":\"Touch a context lease\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{{\"id\":{{\"type\":\"string\"}}}},\"required\":[\"id\"]}}}},
+                {{\"name\":\"skill_run\",\"description\":\"Run a predefined skill\",\"inputSchema\":{{\"type\":\"object\",\"properties\":{{\"name\":{{\"type\":\"string\"}}}},\"required\":[\"name\"]}}}}
+            ]}}}}", id);
+        } else if line.contains("\"method\":\"callTool\"") {
+            let tool_name = json_str_field(&line, "name").unwrap_or("");
+            let params = line.find("\"params\"").and_then(|p| line[p..].find('{')).map(|p| {
+                let start = line.find("\"params\"").unwrap() + p;
+                extract_json_object(&line[start..])
+            }).unwrap_or("");
+
+            let result = match tool_name {
+                "batch" => {
+                    let batch_json = json_str_field(params, "batch").unwrap_or("[]");
+                    match parse_batch_calls(batch_json) {
+                        Ok(calls) => {
+                            let mut results = Vec::new();
+                            for (tool, arg) in calls {
+                                let (status, payload) = execute_batch_call(&tool, arg.as_deref());
+                                results.push(format!("{{\"tool\":\"{}\",\"status\":\"{}\",\"result\":\"{}\"}}", json_escape(&tool), status, json_escape(&payload)));
+                            }
+                            format!("[{}]", results.join(","))
+                        }
+                        Err(e) => format!("{{\"error\":\"{}\"}}", json_escape(&e))
+                    }
+                }
+                "packet_load" => {
+                    let name = json_str_field(params, "name").unwrap_or("");
+                    match load_packet_as_batch(name) {
+                        Ok(batch) => batch,
+                        Err(e) => format!("{{\"error\":\"{}\"}}", json_escape(&e))
+                    }
+                }
+                "lease_touch" => {
+                    let lease_id = json_str_field(params, "id").unwrap_or("");
+                    match touch_lease_logic(lease_id) {
+                        Ok(json) => json,
+                        Err(e) => format!("{{\"error\":\"{}\"}}", json_escape(&e))
+                    }
+                }
+                "skill_run" => {
+                    let name = json_str_field(params, "name").unwrap_or("");
+                    match run_skill_logic(name) {
+                        Ok(report) => report,
+                        Err(e) => format!("{{\"error\":\"{}\"}}", json_escape(&e))
+                    }
+                }
+                _ => format!("{{\"error\":\"unknown tool: {}\"}}", json_escape(tool_name))
+            };
+
+            println!("{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{}\"}}]}}}}", id, json_escape(&result));
+        }
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+fn json_num_field<'a>(obj: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{}\"", key);
+    let key_pos = obj.find(&needle)?;
+    let after_key = &obj[key_pos + needle.len()..];
+    let colon_pos = after_key.find(':')?;
+    let val_start = after_key[colon_pos + 1..].find(|c: char| c.is_ascii_digit())?;
+    let abs_start = key_pos + needle.len() + colon_pos + 1 + val_start;
+    let val_end = obj[abs_start..].find(|c: char| !c.is_ascii_digit()).unwrap_or(obj.len() - abs_start);
+    Some(&obj[abs_start..abs_start + val_end])
+}
+
+fn extract_json_object(input: &str) -> &str {
+    let mut depth = 0;
+    let mut end = 0;
+    for (i, b) in input.as_bytes().iter().enumerate() {
+        if *b == b'{' { depth += 1; }
+        else if *b == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                end = i + 1;
+                break;
+            }
+        }
+    }
+    if end > 0 { &input[..end] } else { "" }
+}
+
+fn expand_mcp_alias_with_symbols(input: &str) -> Result<mcp_router::McpCall, String> {
+    let aliases = load_mcp_aliases()?;
+    let mut expanded = expand_mcp_alias(input, &aliases)?;
+    let symbol_aliases = load_symbol_aliases()?;
+    expanded.argument_value = resolve_symbol_alias(&expanded.argument_value, &symbol_aliases);
+    Ok(expanded)
 }
 
 #[cfg(test)]
@@ -1144,7 +1369,7 @@ mod tests {
 
     fn tempfile_path() -> String {
         format!(
-            "/tmp/kosh_test_{}.txt",
+            "/tmp/rtk_test_{}.txt",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

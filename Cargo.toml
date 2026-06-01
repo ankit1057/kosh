@@ -5,7 +5,7 @@ members = [
     "crates/cost_estimator",
     "crates/indexer",
     "crates/mcp_router",
-    "crates/packet_engine",
+    "crates/packet_engine", "crates/skill_engine",
     "crates/tool_registry",
 ]
 resolver = "2"

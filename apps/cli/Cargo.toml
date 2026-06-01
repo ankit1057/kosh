@@ -1,11 +1,11 @@
 [package]
-name = "kosh-cli"
+name = "rtk-cli"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "kosh"
+name = "rtk"
 path = "src/main.rs"
 
 [dependencies]
@@ -14,4 +14,5 @@ cost_estimator = { path = "../../crates/cost_estimator" }
 indexer = { path = "../../crates/indexer" }
 mcp_router = { path = "../../crates/mcp_router" }
 packet_engine = { path = "../../crates/packet_engine" }
+skill_engine = { path = "../../crates/skill_engine" }
 tool_registry = { path = "../../crates/tool_registry" }

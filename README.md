@@ -21,29 +21,29 @@ Kosh is a context virtualization layer for AI agents. It treats repository conte
 
 ```bash
 cargo test
-cargo run -p kosh-cli -- git status
-cargo run -p kosh-cli -- expand gs
-cargo run -p kosh-cli -- config init
-cargo run -p kosh-cli -- symbols put @authrepo lib/features/auth/data/repositories/auth_repository_impl.dart
-cargo run -p kosh-cli -- mcp expand "rf @authrepo"
-cargo run -p kosh-cli -- cache fingerprint --repo veil --feature auth --hash xyz
-cargo run -p kosh-cli -- cache put --repo veil --feature auth --hash xyz --summary "Auth flow context"
-cargo run -p kosh-cli -- cache get veil:auth:xyz
-cargo run -p kosh-cli -- index
-cargo run -p kosh-cli -- index write
-cargo run -p kosh-cli -- index diff
-cargo run -p kosh-cli -- gain
-cargo run -p kosh-cli -- gain --json
-cargo run -p kosh-cli -- gain --history
-cargo run -p kosh-cli -- gain --history-json
-cargo run -p kosh-cli -- gain --by-kind
-cargo run -p kosh-cli -- gain --by-context
+cargo run -p rtk-cli -- git status
+cargo run -p rtk-cli -- expand gs
+cargo run -p rtk-cli -- config init
+cargo run -p rtk-cli -- symbols put @authrepo lib/features/auth/data/repositories/auth_repository_impl.dart
+cargo run -p rtk-cli -- mcp expand "rf @authrepo"
+cargo run -p rtk-cli -- cache fingerprint --repo veil --feature auth --hash xyz
+cargo run -p rtk-cli -- cache put --repo veil --feature auth --hash xyz --summary "Auth flow context"
+cargo run -p rtk-cli -- cache get veil:auth:xyz
+cargo run -p rtk-cli -- index
+cargo run -p rtk-cli -- index write
+cargo run -p rtk-cli -- index diff
+cargo run -p rtk-cli -- gain
+cargo run -p rtk-cli -- gain --json
+cargo run -p rtk-cli -- gain --history
+cargo run -p rtk-cli -- gain --history-json
+cargo run -p rtk-cli -- gain --by-kind
+cargo run -p rtk-cli -- gain --by-context
 ```
 
 ## Workspace
 
 ```text
-apps/cli              KOSH command-line interface
+apps/cli              RTK command-line interface
 crates/tool_registry  Command alias registry
 crates/mcp_router     MCP alias parser and expander
 crates/cache_engine   Context fingerprint primitives
@@ -54,11 +54,11 @@ docs/                 Product and architecture notes
 
 ## Local Config
 
-`kosh config init` creates:
+`rtk config init` creates:
 
-- `.kosh/commands.aliases`
-- `.kosh/mcp.aliases`
-- `.kosh/symbols.aliases`
+- `.rtk/commands.aliases`
+- `.rtk/mcp.aliases`
+- `.rtk/symbols.aliases`
 
 Alias file format:
 
@@ -68,39 +68,39 @@ rf => read_file path
 @authrepo => lib/features/auth/data/repositories/auth_repository_impl.dart
 ```
 
-The context cache is stored at `.kosh/cache.tsv`.
+The context cache is stored at `.rtk/cache.tsv`.
 
 ## Indexing
 
 The indexer is the base for context virtualization.
 
 ```bash
-kosh index
-kosh index --json
-kosh index write
-kosh index diff
+rtk index
+rtk index --json
+rtk index write
+rtk index diff
 ```
 
-It records file path, language, byte size, and content hash. The saved index lives at `.kosh/index.tsv`.
+It records file path, language, byte size, and content hash. The saved index lives at `.rtk/index.tsv`.
 
 ## Gain Tracking
 
-KOSH records shorthand expansions that save characters into `.kosh/history.tsv`. Each new row includes timestamp, repo, feature, event kind, compact form, expanded form, and status.
+RTK records shorthand expansions that save characters into `.rtk/history.tsv`. Each new row includes timestamp, repo, feature, event kind, compact form, expanded form, and status.
 
 ```bash
-kosh gain
-kosh gain --json
-kosh gain --history
-kosh gain --history-json
-kosh gain --by-kind
-kosh gain --by-repo
-kosh gain --by-feature
-kosh gain --by-context
+rtk gain
+rtk gain --json
+rtk gain --history
+rtk gain --history-json
+rtk gain --by-kind
+rtk gain --by-repo
+rtk gain --by-feature
+rtk gain --by-context
 ```
 
 The token estimate currently uses a simple 4 characters per token heuristic. This is deliberately conservative and dependency-free for the bootstrap implementation.
 
-Repo names are inferred from the current directory. Override attribution with `KOSH_REPO` and `KOSH_FEATURE`.
+Repo names are inferred from the current directory. Override attribution with `RTK_REPO` and `RTK_FEATURE`.
 
 ## Credits & Acknowledgments
 
