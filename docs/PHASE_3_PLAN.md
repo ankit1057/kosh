@@ -1,50 +1,48 @@
-# Phase 3: Rust-Native Context Operating System (Revised v2)
+# Phase 3: Rust-Native Context Operating System (Revised v3)
 
-## Mission: From Optimization to Context Awareness & Decision Making
-Eliminate context retransmission by enabling Kosh to determine that "context is already known" and recommending the optimal minimal context before a tool call happens.
-
----
-
-## Phase 3.1: Context Awareness Foundation (Week 1 - Completed)
-*   **Context Fingerprint V2**: Branch/Commit/Symbol awareness for state detection.
-*   **Lease Intelligence**: SQLite-backed tracking of `hits`, `last_used`, and `tokens_saved`.
+## Mission: From Optimization to Data-Driven Context Decision Making
+Eliminate context retransmission by enabling Kosh to deterministically prove and recommend the optimal minimal context based on historical ROI and state matching.
 
 ---
 
-## Phase 3.5: Context Resolver (Week 1.5 - IN PROGRESS)
-*   **Goal**: Move from "context storage" to "context decision making."
-*   **Objectives**:
-    1. Resolve active environment fingerprints into available leases.
-    2. Resolve requested symbols into existing packets.
-    3. Rank candidates by estimated token/read savings.
-    4. Provide deterministic recommendations to the agent.
-*   **Commands**:
-    - `kosh context resolve <query>`: Find the best lease/packet match.
-    - `kosh context suggest`: Proactively suggest context based on current repo state.
-    - `kosh context explain`: Justify a context recommendation based on ROI.
-*   **KPI**: Elimination of "Exploratory Turns" before they even begin.
+## Phase 3.1: Context Awareness Foundation (Completed)
+*   **Context Fingerprint V2**: State detection (Commit/Branch/Symbols).
+*   **Lease Intelligence**: SQLite tracking of hits, usage, and token ROI.
+
+---
+
+## Phase 3.5: Context Resolver (Completed)
+*   **Engine**: `crates/context_resolver`.
+*   **Capabilities**: Fingerprint-to-Lease mapping and Query-to-Packet resolution.
+
+---
+
+## Phase 3.5b: Recommendation Scoring & Explainability (IN PROGRESS)
+*   **Goal**: Replace heuristics with data-driven decision making.
+*   **Scoring Engine**: Implement a weighted formula for `ContextScore`:
+    - `0.40 * recency` (Last used)
+    - `0.30 * historical_savings` (Tokens saved)
+    - `0.30 * frequency` (Access count)
+*   **Explainability**: Implement `kosh context explain` to justify recommendations with real metrics.
+*   **KPI**: 100% transparency in context selection logic.
 
 ---
 
 ## Phase 3.6: Symbol Extraction (Week 2)
-*   **Goal**: Extract concepts (classes, functions) into an SQLite `symbol_table`.
-*   **Tech**: `tree-sitter`.
-*   **Economics**: Provide a map of the repository without reading source code.
+*   **Goal**: Extract high-level symbols into an SQLite `symbol_table`.
+*   **Optimization**: Enable **Symbol Overlap** scoring (calculating % match between query and lease content).
 
 ---
 
-## Phase 3.7: Relationship Extraction (Week 3)
-*   **Goal**: Build an SQLite `relations` table (`USES`, `CALLS`).
-*   **Tech**: `petgraph`.
-*   **Outcome**: High-speed resolution of dependencies to minimize lease injection.
+## Phase 3.7: Relationship Extraction & Graph (Week 3)
+*   **Goal**: Map `relations` (USES, CALLS) to compose minimal dependency sets.
 
 ---
 
-## Phase 3.8: Context Diff & Delta Engine (Week 4)
-*   **Goal**: Send only deltas (+/- lines) when a leased context changes slightly.
-*   **KPI**: 95% reduction in re-transmission for "edit-verify" loops.
+## Phase 4: Deterministic Context Planner
+*   **Goal**: Kosh *proves* the minimal context required for a task and composes it on-the-fly.
 
 ---
 
 ## Roadmap Summary
-1. Fingerprint -> 2. Lease Intelligence -> **3. Context Resolver** -> 4. Symbol Extraction -> 5. Symbol Relations -> 6. Context Planning -> 7. MadCat Facts -> 8. Proxy
+1. Fingerprint -> 2. Lease Intelligence -> 3. Context Resolver -> **4. Scoring & Explainability** -> 5. Symbol Extraction -> 6. Relations -> 7. Deterministic Planner -> 8. MadCat Facts

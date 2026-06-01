@@ -1,6 +1,7 @@
-use cache_engine::db::{ContextFingerprintV2, DbLeaseStore};
+use cache_engine::db::{ContextFingerprintV2, DbLeaseStore, DbLeaseRecord};
 use packet_engine::PacketStore;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ContextRecommendation {
@@ -9,6 +10,7 @@ pub struct ContextRecommendation {
     pub confidence: f64,
     pub estimated_tokens_saved: u64,
     pub reason: String,
+    pub score: f64,
 }
 
 pub struct ContextResolver {
@@ -29,14 +31,15 @@ impl ContextResolver {
     pub fn resolve_from_fingerprint(&self, fingerprint: &ContextFingerprintV2) -> Option<ContextRecommendation> {
         let hash = fingerprint.deterministic_hash();
         match self.lease_store.find_by_fingerprint(&hash) {
-            Ok(Some(id)) => {
-                // If we found an exact fingerprint match, confidence is high.
+            Ok(Some(record)) => {
+                let score = self.calculate_lease_score(&record);
                 Some(ContextRecommendation {
-                    lease_id: Some(id),
+                    lease_id: Some(record.id),
                     packet_name: None,
                     confidence: 1.0,
-                    estimated_tokens_saved: 5000, // Heuristic for now
+                    estimated_tokens_saved: record.tokens_saved / (record.access_count.max(1)),
                     reason: "Exact fingerprint match found in lease store.".to_string(),
+                    score,
                 })
             }
             _ => None,
@@ -52,25 +55,54 @@ impl ContextResolver {
                 lease_id: None,
                 packet_name: Some(packet.name.clone()),
                 confidence: 0.95,
-                estimated_tokens_saved: 2000, // Heuristic
+                estimated_tokens_saved: 2000, 
                 reason: format!("Direct match for packet: {}", packet.name),
+                score: 0.95,
             });
         }
 
-        // 2. Fuzzy/Keyword match (very simple for now)
-        for packet in self.packet_store.records() {
-            if packet.name.contains(query) && packet.name != query {
-                results.push(ContextRecommendation {
-                    lease_id: None,
-                    packet_name: Some(packet.name.clone()),
-                    confidence: 0.7,
-                    estimated_tokens_saved: 2000,
-                    reason: format!("Partial match for packet: {}", packet.name),
-                });
+        // 2. Scan leases and score them
+        if let Ok(leases) = self.lease_store.list_all() {
+            for lease in leases {
+                if lease.id.contains(query) || lease.feature.contains(query) || lease.summary.contains(query) {
+                    let score = self.calculate_lease_score(&lease);
+                    results.push(ContextRecommendation {
+                        lease_id: Some(lease.id.clone()),
+                        packet_name: None,
+                        confidence: 0.8, // Basic keyword match confidence
+                        estimated_tokens_saved: lease.tokens_saved / (lease.access_count.max(1)),
+                        reason: format!("Keyword match in lease: {}", lease.id),
+                        score,
+                    });
+                }
             }
         }
 
-        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         results
+    }
+
+    fn calculate_lease_score(&self, record: &DbLeaseRecord) -> f64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // 1. Recency Score (0.40)
+        let last_used = record.last_used.unwrap_or(record.created_at);
+        let seconds_since_use = now.saturating_sub(last_used);
+        let recency_score = if seconds_since_use < 3600 { 1.0 } 
+                           else if seconds_since_use < 86400 { 0.5 }
+                           else { 0.1 };
+
+        // 2. Historical Savings Score (0.30)
+        // Normalize against a "high" savings bar of 1M tokens
+        let savings_score = (record.tokens_saved as f64 / 1_000_000.0).min(1.0);
+
+        // 3. Frequency Score (0.30)
+        // Normalize against a "high" frequency of 100 hits
+        let frequency_score = (record.access_count as f64 / 100.0).min(1.0);
+
+        (0.40 * recency_score) + (0.30 * savings_score) + (0.30 * frequency_score)
     }
 }

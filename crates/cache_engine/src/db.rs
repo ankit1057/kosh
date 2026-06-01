@@ -45,6 +45,20 @@ impl ContextFingerprintV2 {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DbLeaseRecord {
+    pub id: String,
+    pub repo: String,
+    pub feature: String,
+    pub fingerprint_hash: String,
+    pub summary: String,
+    pub byte_size: u64,
+    pub created_at: u64,
+    pub access_count: u64,
+    pub last_used: Option<u64>,
+    pub tokens_saved: u64,
+}
+
 pub struct DbLeaseStore {
     conn: Connection,
 }
@@ -52,7 +66,7 @@ pub struct DbLeaseStore {
 impl DbLeaseStore {
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
-        
+
         // Initialize schema
         conn.execute(
             "CREATE TABLE IF NOT EXISTS leases (
@@ -78,14 +92,49 @@ impl DbLeaseStore {
         Ok(Self { conn })
     }
 
-    pub fn find_by_fingerprint(&self, hash: &str) -> rusqlite::Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT id FROM leases WHERE fingerprint_hash = ? LIMIT 1")?;
+    pub fn find_by_fingerprint(&self, hash: &str) -> rusqlite::Result<Option<DbLeaseRecord>> {
+        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved FROM leases WHERE fingerprint_hash = ? LIMIT 1")?;
         let mut rows = stmt.query(params![hash])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
+            Ok(Some(DbLeaseRecord {
+                id: row.get(0)?,
+                repo: row.get(1)?,
+                feature: row.get(2)?,
+                fingerprint_hash: row.get(3)?,
+                summary: row.get(4).unwrap_or_default(),
+                byte_size: row.get(5)?,
+                created_at: row.get(6)?,
+                access_count: row.get(7)?,
+                last_used: row.get(8)?,
+                tokens_saved: row.get(9)?,
+            }))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn list_all(&self) -> rusqlite::Result<Vec<DbLeaseRecord>> {
+        let mut stmt = self.conn.prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved FROM leases")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DbLeaseRecord {
+                id: row.get(0)?,
+                repo: row.get(1)?,
+                feature: row.get(2)?,
+                fingerprint_hash: row.get(3)?,
+                summary: row.get(4).unwrap_or_default(),
+                byte_size: row.get(5)?,
+                created_at: row.get(6)?,
+                access_count: row.get(7)?,
+                last_used: row.get(8)?,
+                tokens_saved: row.get(9)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
     }
 
     pub fn record_hit(&self, id: &str, tokens: u64) -> rusqlite::Result<()> {
@@ -93,7 +142,7 @@ impl DbLeaseStore {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-            
+
         self.conn.execute(
             "UPDATE leases SET 
                 access_count = access_count + 1,
@@ -133,13 +182,13 @@ mod tests {
         )?;
 
         store.record_hit("lease:auth:001", 250)?;
-        
+
         let saved: u64 = store.conn.query_row(
             "SELECT tokens_saved FROM leases WHERE id = ?",
             params!["lease:auth:001"],
             |r| r.get(0)
         )?;
-        
+
         assert_eq!(saved, 250);
         Ok(())
     }
