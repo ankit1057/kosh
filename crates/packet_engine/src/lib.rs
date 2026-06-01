@@ -97,6 +97,26 @@ impl PacketStore {
         &self.records
     }
 
+    /// Resolve a packet's symbols through the provided alias map.
+    /// Returns (files, unresolved_symbols) where files includes all resolved paths.
+    pub fn resolve_symbols<'a>(
+        record: &'a PacketRecord,
+        aliases: &std::collections::HashMap<String, String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut files = record.files.clone();
+        let mut unresolved = Vec::new();
+        for sym in &record.symbols {
+            if let Some(path) = aliases.get(sym.as_str()) {
+                files.push(path.clone());
+            } else {
+                unresolved.push(sym.clone());
+            }
+        }
+        files.sort();
+        files.dedup();
+        (files, unresolved)
+    }
+
     pub fn from_tsv(input: &str) -> Result<Self, String> {
         let mut store = Self::new();
 
@@ -143,6 +163,24 @@ impl PacketStore {
 
         output
     }
+}
+
+/// Load a symbols aliases file (tab-separated: @symbol\tpath per line).
+/// Returns a HashMap<symbol, path>.
+pub fn load_symbol_aliases(path: &std::path::Path) -> std::io::Result<std::collections::HashMap<String, String>> {
+    if !path.exists() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    let mut map = std::collections::HashMap::new();
+    for line in content.lines() {
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let mut parts = line.splitn(2, '\t');
+        if let (Some(sym), Some(path)) = (parts.next(), parts.next()) {
+            map.insert(sym.trim().to_string(), path.trim().to_string());
+        }
+    }
+    Ok(map)
 }
 
 fn format_pipe_list(items: &[String]) -> String {
@@ -299,6 +337,56 @@ mod tests {
         assert!(store.delete("auth"));
         assert!(store.get("auth").is_none());
         assert!(!store.delete("auth")); // already gone
+    }
+
+    #[test]
+    fn resolve_symbols_resolves_known_symbol() {
+        let record = PacketRecord::new(
+            "auth",
+            vec!["src/auth.rs".to_string()],
+            vec!["@authrepo".to_string()],
+            1,
+        );
+        let mut aliases = std::collections::HashMap::new();
+        aliases.insert("@authrepo".to_string(), "repos/auth".to_string());
+
+        let (files, unresolved) = PacketStore::resolve_symbols(&record, &aliases);
+
+        assert!(files.contains(&"repos/auth".to_string()));
+        assert!(files.contains(&"src/auth.rs".to_string()));
+        assert!(unresolved.is_empty());
+    }
+
+    #[test]
+    fn resolve_symbols_leaves_unknown_symbol_in_unresolved() {
+        let record = PacketRecord::new(
+            "auth",
+            vec!["src/auth.rs".to_string()],
+            vec!["@unknown".to_string()],
+            1,
+        );
+        let aliases = std::collections::HashMap::new();
+
+        let (files, unresolved) = PacketStore::resolve_symbols(&record, &aliases);
+
+        assert_eq!(files, vec!["src/auth.rs"]);
+        assert_eq!(unresolved, vec!["@unknown"]);
+    }
+
+    #[test]
+    fn load_symbol_aliases_parses_tsv() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().expect("failed to create temp file");
+        writeln!(tmp, "# comment line").unwrap();
+        writeln!(tmp, "@authrepo\trepos/auth").unwrap();
+        writeln!(tmp, "@dbschema\tschema/db.sql").unwrap();
+        writeln!(tmp, "").unwrap();
+
+        let map = load_symbol_aliases(tmp.path()).expect("load failed");
+
+        assert_eq!(map.get("@authrepo"), Some(&"repos/auth".to_string()));
+        assert_eq!(map.get("@dbschema"), Some(&"schema/db.sql".to_string()));
+        assert_eq!(map.len(), 2);
     }
 
     #[test]
