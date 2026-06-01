@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "apps/cli",
-    "crates/cache_engine", 
+    "crates/cache_engine", "crates/context_resolver", 
     "crates/cost_estimator",
     "crates/indexer",
     "crates/mcp_router",

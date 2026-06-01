@@ -1,89 +1,50 @@
-# Phase 3: Rust-Native Context Operating System - Technical Specification
+# Phase 3: Rust-Native Context Operating System (Revised v2)
 
-## 1. Honest State Findings (End of Phase 2)
-
-### What Works
-- **Token Elimination Thesis**: Proved 91.4% payload reduction without LLMs.
-- **Deterministic Virtualization**: Aliases, Leasing, and Packets are functional.
-- **Gain Tracking**: Heuristic-based tracking is reliable and proves ROI.
-- **Zero-Dependency Core**: Fast, minimal overhead, easily portable.
-
-### What is Fragile/Limited
-- **Concurrency**: TSV files lack locking; concurrent agent turns risk data corruption.
-- **Query Performance**: Indexer and Symbol lookups are $O(N)$ string scans.
-- **Exploration Overhead**: Agents still need to "search" before they can "lease".
-- **Memory Footprint**: Full deserialization of packets/indexes is inefficient for large repos.
+## Mission: From Optimization to Context Awareness & Decision Making
+Eliminate context retransmission by enabling Kosh to determine that "context is already known" and recommending the optimal minimal context before a tool call happens.
 
 ---
 
-## 2. Phase 3 Architectural Specifications
-
-### Priority 1: SQLite Migration (`kosh.db`)
-- **Engine**: `rusqlite`.
-- **Rationale**: Provides ACID compliance, atomic writes, and relational querying for gain analytics.
-- **Schema**: Consolidate `cache`, `leases`, `history`, `packets`, and `index` into a single local database.
-- **KPI**: 100% elimination of state corruption during parallel tool calls.
-
-### Priority 2: Memory-Mapped Context Store (`memmap2`)
-- **Implementation**: Map `.kpkt` (binary packets) directly into memory.
-- **Rationale**: Zero-copy access. Instead of loading a 5MB packet into a `Vec<String>`, the agent reads only the specific byte offsets required.
-- **KPI**: >90% reduction in RAM usage and sub-millisecond context retrieval.
-
-### Priority 3: Symbol Graph for Elimination
-- **Stack**: `tree-sitter` (parsers) + `petgraph` (graph engine).
-- **Goal**: Resolve "What does `AuthService` depend on?" instantly.
-- **Economics**: Allow Kosh to suggest the *exact* minimum lease required for a task, eliminating "just-in-case" file reads.
-- **KPI**: 50% reduction in "exploratory" tool calls.
-
-### Priority 4: Binary Context Packets (`.kpkt`)
-- **Serialization**: `postcard` (efficient binary format).
-- **Content**: Pre-indexed symbol offsets, fingerprints, and dependency pointers.
-- **KPI**: 70% reduction in disk storage vs JSON packets.
-
-### Priority 5: Context Diff Engine
-- **Stack**: `similar`, `diffy`.
-- **Logic**: If an agent has `lease:auth:001` but the file changed, send only the `edits` (delta) to update to `v2`.
-- **KPI**: 95% reduction in re-transmission tokens when files undergo minor changes.
+## Phase 3.1: Context Awareness Foundation (Week 1 - Completed)
+*   **Context Fingerprint V2**: Branch/Commit/Symbol awareness for state detection.
+*   **Lease Intelligence**: SQLite-backed tracking of `hits`, `last_used`, and `tokens_saved`.
 
 ---
 
-## 3. Week-by-Week Roadmap
-
-### Week 1: SQLite & Fingerprint v2
-- Migrate TSV loaders to `rusqlite`.
-- Implement `ContextFingerprintV2` (Repo + Branch + Commit + Symbol List).
-- Update `kosh gain` to use SQL queries for multi-dimensional ROI reporting.
-
-### Week 2: Tree-Sitter & Petgraph
-- Integrate `tree-sitter` for Rust/TypeScript/Python.
-- Build the initial symbol dependency graph in `crates/indexer`.
-- Add `kosh graph find <symbol>` command.
-
-### Week 3: Binary Packets & Diff Engine
-- Implement `.kpkt` serialization via `postcard`.
-- Integrate `memmap2` for zero-copy reading.
-- Implement delta-only context injection for leased handles.
-
-### Week 4: MadCat Fact Memory
-- Implement `crates/fact_engine` inspired by MadCat.
-- Store architectural decisions and "agent discoveries" as persistent facts.
-- Define memory policies (expire vs. pin).
+## Phase 3.5: Context Resolver (Week 1.5 - IN PROGRESS)
+*   **Goal**: Move from "context storage" to "context decision making."
+*   **Objectives**:
+    1. Resolve active environment fingerprints into available leases.
+    2. Resolve requested symbols into existing packets.
+    3. Rank candidates by estimated token/read savings.
+    4. Provide deterministic recommendations to the agent.
+*   **Commands**:
+    - `kosh context resolve <query>`: Find the best lease/packet match.
+    - `kosh context suggest`: Proactively suggest context based on current repo state.
+    - `kosh context explain`: Justify a context recommendation based on ROI.
+*   **KPI**: Elimination of "Exploratory Turns" before they even begin.
 
 ---
 
-## 4. Final Goal Architecture
+## Phase 3.6: Symbol Extraction (Week 2)
+*   **Goal**: Extract concepts (classes, functions) into an SQLite `symbol_table`.
+*   **Tech**: `tree-sitter`.
+*   **Economics**: Provide a map of the repository without reading source code.
 
-```text
-Question 
-  ↓
-[KOSH]
-  1. Symbol Graph Lookup (Find dependencies)
-  2. Lease/Cache Check (Already seen?)
-  3. Fact Memory Check (Architecture rules?)
-  ↓
-Context Delta (Minimal bits)
-  ↓
-Answer
-```
+---
 
-**Result**: Deep engineering work with sub-1000 token overhead per turn.
+## Phase 3.7: Relationship Extraction (Week 3)
+*   **Goal**: Build an SQLite `relations` table (`USES`, `CALLS`).
+*   **Tech**: `petgraph`.
+*   **Outcome**: High-speed resolution of dependencies to minimize lease injection.
+
+---
+
+## Phase 3.8: Context Diff & Delta Engine (Week 4)
+*   **Goal**: Send only deltas (+/- lines) when a leased context changes slightly.
+*   **KPI**: 95% reduction in re-transmission for "edit-verify" loops.
+
+---
+
+## Roadmap Summary
+1. Fingerprint -> 2. Lease Intelligence -> **3. Context Resolver** -> 4. Symbol Extraction -> 5. Symbol Relations -> 6. Context Planning -> 7. MadCat Facts -> 8. Proxy

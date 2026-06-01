@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cache_engine::db::ContextFingerprintV2;
 use cache_engine::{CacheRecord, ContextCache, ContextFingerprint, ContextLeaseManager};
+use context_resolver::ContextResolver;
 use cost_estimator::{
     parse_compression_history, summarize_compression, summarize_compression_by_context,
     summarize_compression_by_feature, summarize_compression_by_kind, summarize_compression_by_repo,
@@ -72,6 +74,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "expand" => handle_expand(&args[1..]),
         "mcp" => handle_mcp(&args[1..]),
         "cache" => handle_cache(&args[1..]),
+        "context" => handle_context(&args[1..]),
         "lease" => handle_lease(&args[1..]),
         "batch" => handle_batch(&args[1..]),
         "packet" => handle_packet(&args[1..]),
@@ -323,6 +326,52 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         _ => Err("usage: rtk cache <fingerprint|put|get|list>".to_string()),
+    }
+}
+
+fn handle_context(args: &[String]) -> Result<ExitCode, String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+    let resolver = ContextResolver::open(cfg_path("kosh.db"), cfg_path("packets.tsv"))?;
+
+    match subcommand {
+        "resolve" => {
+            let query = args
+                .get(1)
+                .ok_or_else(|| "usage: rtk context resolve <query>".to_string())?;
+            let recommendations = resolver.resolve_query(query);
+            for rec in recommendations {
+                println!("{}", serde_json::to_string(&rec).unwrap());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        "suggest" => {
+            // Very basic suggestion: just look at current repo fingerprint
+            let snapshot = load_index_snapshot()?;
+            let mut fingerprint = ContextFingerprintV2::new(
+                &current_repo_name(),
+                "main", // TODO: detect branch
+                "HEAD", // TODO: detect commit
+            );
+            // Just for demonstration, we could add files from snapshot
+            for file in snapshot.files.iter().take(5) {
+                fingerprint.add_file(&file.path);
+            }
+
+            if let Some(rec) = resolver.resolve_from_fingerprint(&fingerprint) {
+                println!("{}", serde_json::to_string(&rec).unwrap());
+            } else {
+                println!("{{\"suggestion\":\"None\",\"reason\":\"No matching lease found for current state.\"}}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        "explain" => {
+            println!("Context Resolution ROI Logic:");
+            println!("1. Fingerprint Match: 100% confidence, saves full context retransmission.");
+            println!("2. Packet Match: 95% confidence, saves multiple discovery turns.");
+            println!("3. Keyword Match: 70% confidence, aids discovery.");
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => Err("usage: rtk context <resolve|suggest|explain>".to_string()),
     }
 }
 
