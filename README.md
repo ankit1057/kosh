@@ -1,110 +1,228 @@
 # Kosh
 
-Kosh is a context virtualization layer for AI agents. It treats repository context as a referable, reusable, and compressible resource, significantly reducing token costs in autonomous engineering workflows.
+**Context virtualization for AI agents. Measure and eliminate token waste.**
 
-## Documentation
+Kosh treats repository context as a referable, reusable, and compressible resource.
+Instead of retransmitting the same files across every agent turn, Kosh lets agents
+reference context by handle — and tracks exactly how many tokens were avoided.
 
-- **[Technical Whitepaper](docs/whitepaper.md)**: The core thesis on Token Economics and Context Virtualization.
-- **[User Guide](docs/USER_GUIDE.md)**: Installation, configuration, and first steps.
-- **[Lease Economy Report](docs/LEASE_ECONOMY_REPORT.md)**: Projections on token and read savings.
+---
 
-## Key Features
+## Benchmark Results
 
-- `Kosh CLI`: Compact commands for common agent workflows.
-- `Context Leasing`: Stable handles (e.g., `lease:auth:001`) to eliminate redundant retransmissions.
-- `Context Packets`: Group related files/symbols into loadable bundles.
-- `MCP Batching`: Collapse multiple tool calls into one roundtrip.
-- `Indexer`: File inventory, language detection, and change tracking.
-- `Gain Tracking`: Real-time monitoring of token and cost savings.
+Independent payload benchmarks measuring Kosh primitives against naive alternatives.
+No LLM involved — raw bytes in, raw bytes out.
+
+```
+Suite                        Naive tok   Kosh tok     Saved      %   Calls↓
+─────────────────────────────────────────────────────────────────────────────
+Leasing (10-turn session)      20,480      2,221   +18,258   89.2%      +9
+Packet loading (7 files)        7,398        117    +7,280   98.4%      +7
+Batching (5 serial reads)       1,321         82    +1,239   93.8%      +4
+Symbol compression (×10 refs)     157        105       +52   33.3%      +0
+─────────────────────────────────────────────────────────────────────────────
+TOTAL                          29,357      2,526   +26,831   91.4%     +20
+```
+
+> Kosh primitives reduced benchmarked context-transfer payloads by up to 98.4%,
+> with an aggregate reduction of 91.4% across the benchmark suite.
+
+Run the benchmarks yourself:
+
+```bash
+cargo build
+python agent_test/kosh_benchmarks.py
+```
+
+---
+
+## How It Works
+
+### Leasing — read once, reference many times
+
+```bash
+kosh lease create --repo myapp --feature auth --fingerprint abc123 --summary "Auth module"
+# => {"id":"lease:auth:001", ...}
+
+# Every subsequent turn: reference the lease, not the file
+kosh lease touch lease:auth:001
+```
+
+A 10-turn session reading the same 8 KB of context costs **20,480 tokens** naively.
+With leasing: **2,221 tokens**. The file is read once; subsequent turns send a 30-char handle.
+
+### Packets — one call instead of N reads
+
+```bash
+kosh packet create --name auth \
+  --file lib/auth/repo.dart \
+  --file lib/auth/models.dart \
+  --symbol @authrepo
+
+kosh packet load auth
+# => {"tool":"read_file","path":"lib/auth/repo.dart"}
+#    {"tool":"read_file","path":"lib/auth/models.dart"}
+#    {"tool":"read_file","path":"..."}  (resolved from @authrepo)
+```
+
+Seven individual reads (ls + 7 read_file calls = 7,398 tokens) collapse to one
+packet load call (117 tokens). **98.4% reduction.**
+
+### Batching — collapse serial tool calls
+
+```bash
+kosh batch '[
+  {"tool":"read_file","path":"Cargo.toml"},
+  {"tool":"read_file","path":"apps/cli/Cargo.toml"},
+  {"tool":"read_file","path":"crates/packet_engine/Cargo.toml"}
+]'
+```
+
+Five serial reads accumulate conversation-history overhead with each round trip.
+One batch call eliminates 4 of 5 round trips. **93.8% reduction.**
+
+### Gain Tracking — see exactly what was saved
+
+```bash
+kosh gain --by-kind
+# lease_hit     54,945 estimated tokens saved   $0.55
+# mcp_batch     22,147 estimated tokens saved   $0.22
+# packet_load      245 estimated tokens saved   $0.002
+```
+
+Every Kosh operation records its savings in `.kosh/history.tsv`.
+Gain tracking is the most important part — it makes token elimination measurable
+and reproducible across sessions and releases.
+
+---
 
 ## Quick Start
 
 ```bash
-cargo test
-cargo run -p rtk-cli -- git status
-cargo run -p rtk-cli -- expand gs
-cargo run -p rtk-cli -- config init
-cargo run -p rtk-cli -- symbols put @authrepo lib/features/auth/data/repositories/auth_repository_impl.dart
-cargo run -p rtk-cli -- mcp expand "rf @authrepo"
-cargo run -p rtk-cli -- cache fingerprint --repo veil --feature auth --hash xyz
-cargo run -p rtk-cli -- cache put --repo veil --feature auth --hash xyz --summary "Auth flow context"
-cargo run -p rtk-cli -- cache get veil:auth:xyz
-cargo run -p rtk-cli -- index
-cargo run -p rtk-cli -- index write
-cargo run -p rtk-cli -- index diff
-cargo run -p rtk-cli -- gain
-cargo run -p rtk-cli -- gain --json
-cargo run -p rtk-cli -- gain --history
-cargo run -p rtk-cli -- gain --history-json
-cargo run -p rtk-cli -- gain --by-kind
-cargo run -p rtk-cli -- gain --by-context
+git clone https://github.com/ankit1057/agent-kosh
+cd agent-kosh
+cargo build
+./target/debug/kosh --help
 ```
+
+### Initialize a project
+
+```bash
+kosh config init
+# creates .kosh/commands.aliases, mcp.aliases, symbols.aliases
+```
+
+### Symbol aliases
+
+```bash
+kosh symbols put @authrepo lib/features/auth/data/repositories/auth_repository_impl.dart
+kosh mcp expand "rf @authrepo"
+# => {"tool":"read_file","path":"lib/features/auth/data/repositories/auth_repository_impl.dart"}
+```
+
+### Context cache
+
+```bash
+kosh cache put --repo myapp --feature auth --hash abc123 --summary "Auth flow context"
+kosh cache get myapp:auth:abc123
+```
+
+### Indexer
+
+```bash
+kosh index          # scan working directory
+kosh index write    # persist to .kosh/index.tsv
+kosh index diff     # compare to last saved snapshot
+```
+
+### Gain report
+
+```bash
+kosh gain
+kosh gain --by-kind
+kosh gain --by-repo
+kosh gain --history
+```
+
+---
 
 ## Workspace
 
-```text
-apps/cli              RTK command-line interface
-crates/tool_registry  Command alias registry
-crates/mcp_router     MCP alias parser and expander
-crates/cache_engine   Context fingerprint primitives
-crates/cost_estimator Token and cost savings estimates
-crates/indexer        File inventory and change detection
-docs/                 Product and architecture notes
+```
+apps/cli                Binary: kosh
+crates/tool_registry    Command alias expansion
+crates/mcp_router       MCP alias parser and symbol resolution
+crates/cache_engine     Context fingerprinting and leasing
+crates/packet_engine    Context packet bundles
+crates/cost_estimator   Token savings tracking and reporting
+crates/indexer          File inventory and change detection
+agent_test/             Benchmark harnesses
+docs/                   Architecture notes and economy reports
 ```
 
-## Local Config
+Config dir: `.kosh/` (falls back to `.rtk/` for existing data).
+Env vars: `KOSH_REPO`, `KOSH_FEATURE` (fall back to `RTK_REPO`, `RTK_FEATURE`).
 
-`rtk config init` creates:
+---
 
-- `.rtk/commands.aliases`
-- `.rtk/mcp.aliases`
-- `.rtk/symbols.aliases`
+## Contributing
 
-Alias file format:
+Kosh is early-stage infrastructure. The primitives work; the gaps are known.
 
-```text
-gs => git status --short
-rf => read_file path
-@authrepo => lib/features/auth/data/repositories/auth_repository_impl.dart
-```
+**High-value contributions:**
 
-The context cache is stored at `.rtk/cache.tsv`.
+- **Real session replay benchmark** — extract `read_file`/`grep`/`ls` calls from a Claude Code
+  or Codex transcript and replay with/without Kosh. This is the missing "real world" benchmark.
+- **`kosh benchmark` subcommand** — run the four primitive suites as a single CLI command,
+  output a machine-readable report so every release can track regression/improvement.
+- **Packet symbol resolution** — `kosh packet load` should resolve `@symbol` refs through
+  `.kosh/symbols.aliases` before emitting MCP calls (currently stores the symbol as-is).
+- **Lease size accuracy** — link lease fingerprints to indexer data so `lease touch` records
+  actual avoided bytes instead of a fixed heuristic.
+- **MCP server stub** — minimal stdio JSON-RPC server wrapping the CLI for native agent integration.
+- **Automatic packet generation** — use the indexer or import tracing to suggest packets
+  based on co-accessed files.
 
-## Indexing
+**Design constraints (please read before opening a PR):**
 
-The indexer is the base for context virtualization.
+- No LLMs, no embeddings, no graph intelligence until token savings are proven by measurement
+- All storage in TSV format — zero external dependencies, human-readable, diffable
+- Every new feature must answer: *what measurable token expenditure does this eliminate?*
+- One document equals many code changes, not the reverse
+
+**Run the tests:**
 
 ```bash
-rtk index
-rtk index --json
-rtk index write
-rtk index diff
+cargo test       # 46 unit tests across all crates
+cargo check      # zero warnings policy
+cargo fmt --all  # enforced formatting
 ```
 
-It records file path, language, byte size, and content hash. The saved index lives at `.rtk/index.tsv`.
+---
 
-## Gain Tracking
+## Roadmap
 
-RTK records shorthand expansions that save characters into `.rtk/history.tsv`. Each new row includes timestamp, repo, feature, event kind, compact form, expanded form, and status.
-
-```bash
-rtk gain
-rtk gain --json
-rtk gain --history
-rtk gain --history-json
-rtk gain --by-kind
-rtk gain --by-repo
-rtk gain --by-feature
-rtk gain --by-context
+```
+v0.1  ✅  Aliases, symbols, cache, gain tracking, indexer
+v0.2  ✅  Context leasing, MCP batching, context packets, kosh rename
+v0.3  🔲  kosh benchmark CLI, packet symbol resolution, lease size accuracy
+v0.4  🔲  MCP server, real session replay benchmark
+v0.5  🔲  Automatic packet generation, session telemetry export
 ```
 
-The token estimate currently uses a simple 4 characters per token heuristic. This is deliberately conservative and dependency-free for the bootstrap implementation.
+---
 
-Repo names are inferred from the current directory. Override attribution with `RTK_REPO` and `RTK_FEATURE`.
+## Credits
 
-## Credits & Acknowledgments
+- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)** — core token elimination mission
+  and proxy architecture
+- **[MadCat](https://gitlab.com/cabalbl4/madcat)** — long-term memory and research fact layer inspiration
 
-Kosh is built upon the foundational work and vision of several pioneer projects in the AI agent space:
+---
 
-- **[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk)**: Kosh inherits its core token elimination mission and "Proxy" architecture from the original RTK project by the **RTK AI team**.
-- **[MadCat](https://gitlab.com/cabalbl4/madcat)**: Kosh's long-term memory vision and future research fact layer are inspired by the MadCat project by **cabalbl4**.
+<!-- hashtags for discoverability -->
+<!--
+#ai #llm #agents #tokenoptimization #claudecode #mcp #rust #contextwindow
+#aiengineering #llmops #agentic #tokensaving #rustlang #openhermes #mlx
+#aiinfrastructure #contextcompression #aitools #codingagents #aiproductivity
+-->

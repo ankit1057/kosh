@@ -5,3 +5,8 @@
 .idea/
 .vscode/
 *.log
+
+# Planning and session artifacts
+docs/superpowers/
+.claude/
+.remember/logs/
