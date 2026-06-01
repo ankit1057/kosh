@@ -47,6 +47,20 @@ python agent_test/kosh_benchmarks.py
 
 ---
 
+## Why Tool Outputs, Not Prompt Compression
+
+SWE-bench measurements show that **30,400 of 48,400 total agent tokens come from tool results**,
+and 39.9–59.7% of those are removable with no performance loss. Prompt compression targets the
+wrong layer.
+
+The second finding that shapes Kosh's architecture: in a naive 10-step agent loop, token cost
+follows a triangular number series — each step re-bills all prior context. A 10-step loop costs
+**43.3× more than a single call**. Prompt caching reduces the cost per prefix read (~90%
+discount) but doesn't touch this growth. Kosh's leasing and batching attack the accumulation
+itself — eliminating turns, not discounting them.
+
+---
+
 ## How It Works
 
 ### Leasing — read once, reference many times
@@ -191,15 +205,16 @@ kosh gain --history
 ## Workspace
 
 ```
-apps/cli                Binary: kosh
-crates/tool_registry    Command alias expansion
-crates/mcp_router       MCP alias parser and symbol resolution
-crates/cache_engine     Context fingerprinting and leasing
-crates/packet_engine    Context packet bundles
-crates/cost_estimator   Token savings tracking and reporting
-crates/indexer          File inventory and change detection
-agent_test/             Benchmark harnesses
-docs/                   Architecture notes and economy reports
+apps/cli                    Binary: kosh
+crates/tool_registry        Command alias expansion
+crates/mcp_router           MCP alias parser and symbol resolution
+crates/cache_engine         Context fingerprinting and leasing
+crates/packet_engine        Context packet bundles
+crates/context_signatures   Jaccard overlap scoring, context composition
+crates/cost_estimator       Token savings tracking and reporting
+crates/indexer              File inventory and change detection
+agent_test/                 Benchmark harnesses (primitive + session replay)
+docs/                       Architecture notes and economy reports
 ```
 
 Config dir: `.kosh/` (falls back to `.rtk/` for existing data).
@@ -259,10 +274,12 @@ cargo fmt --all  # enforced formatting
 v0.1  ✅  Aliases, symbols, cache, gain tracking, indexer
 v0.2  ✅  Context leasing, MCP batching, context packets, kosh rename
 v0.3  🔲  kosh benchmark CLI, packet symbol resolution, lease size accuracy
-v0.4  🔲  MCP proxy (transparent stdio interception), real session replay benchmark
-v0.5  🔲  Quality-preservation metrics (savings + task-success paired), session telemetry export
-v0.6  🔲  Deterministic context planning (map task → minimum required files, no repo exploration)
-v0.7  🔲  Fact memory (architecture decisions, known bugs — TSV/SQLite, confidence scores)
+v0.4  🔲  Context signatures + composition (Jaccard overlap scoring, kosh signature match)
+v0.5  🔲  Real session replay benchmark — actual API, prompt caching on, savings + task-success paired
+v0.6  🔲  MCP proxy — transparent stdio interception (proven pattern: mcpwall, mcp-audit)
+v0.7  🔲  Deterministic context planner — task description → minimum required files, no repo exploration
+v0.8  🔲  Fact engine — architecture decisions, known bugs, TSV + SQLite FTS5, confidence scores
+v0.9  🔲  Kosh OS — context fingerprint → lease match → fact match → answer, 0 redundant reads
 ```
 
 ---
