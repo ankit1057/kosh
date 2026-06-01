@@ -4,7 +4,7 @@ members = [
     "crates/cache_engine", "crates/context_resolver", "crates/context_signatures",
     "crates/cost_estimator",
     "crates/indexer",
-    "crates/mcp_router",
+    "crates/mcp_proxy", "crates/mcp_router",
     "crates/fact_engine", "crates/packet_engine", "crates/skill_engine", "crates/symbol_extractor",
     "crates/tool_registry",
 ]
