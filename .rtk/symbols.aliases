@@ -1,3 +1,3 @@
-# RTK symbol aliases.
+# KOSH symbol aliases.
 # Format: <@symbol> => <value>
-@authrepo => lib/features/auth/data/repositories/auth_repository_impl.dart
+@authrepo => crates/cache_engine/src/lib.rs
