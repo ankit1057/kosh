@@ -6,6 +6,12 @@ Kosh treats repository context as a referable, reusable, and compressible resour
 Instead of retransmitting the same files across every agent turn, Kosh lets agents
 reference context by handle — and tracks exactly how many tokens were avoided.
 
+> **Kosh vs prompt caching:** Anthropic/OpenAI prompt caching reduces the *cost* of
+> retransmitting a cached prefix (~90% discount on cache reads). Kosh reduces the *need*
+> to transmit that prefix in the first place — and eliminates the round trips that caching
+> never touches: repeated `read_file`, `grep`, and `find` calls that accumulate as growing,
+> un-cacheable conversation history. Use both together.
+
 ---
 
 ## Benchmark Results
@@ -26,6 +32,11 @@ TOTAL                          29,357      2,526   +26,831   91.4%     +20
 
 > Kosh primitives reduced benchmarked context-transfer payloads by up to 98.4%,
 > with an aggregate reduction of 91.4% across the benchmark suite.
+
+**What these numbers measure:** `chars // 4` token estimation, no API call, no model in the loop.
+These are *payload-reduction* benchmarks that isolate Kosh's primitives from model behavior.
+The next benchmark (v0.3) will replay a real agent session against the actual API with prompt
+caching enabled in both arms and report billed tokens, latency, and task-success side by side.
 
 Run the benchmarks yourself:
 
@@ -80,6 +91,29 @@ kosh batch '[
 
 Five serial reads accumulate conversation-history overhead with each round trip.
 One batch call eliminates 4 of 5 round trips. **93.8% reduction.**
+
+### Pipeline — what the model actually receives
+
+```
+Agent turn N:
+  "investigate login bug"
+        │
+        ▼
+  kosh packet load auth          ← 1 call, 117 chars
+        │
+        ▼
+  [lib/auth/repo.dart             ← materialized locally,
+   lib/auth/models.dart            not re-transmitted
+   lib/auth/login_usecase.dart]    from model context
+        │
+        ▼
+  Model receives: minimal context only
+  Tokens avoided: file content that would have been
+                  re-read and re-appended to history
+```
+
+The key question is not "can I replace 500 tokens with 5?"
+It is "can I avoid materializing 49,500 of the original 50,000 tokens entirely?"
 
 ### Gain Tracking — see exactly what was saved
 
@@ -180,7 +214,11 @@ Kosh is early-stage infrastructure. The primitives work; the gaps are known.
 **High-value contributions:**
 
 - **Real session replay benchmark** — extract `read_file`/`grep`/`ls` calls from a Claude Code
-  or Codex transcript and replay with/without Kosh. This is the missing "real world" benchmark.
+  or Codex transcript and replay with/without Kosh against the actual API, prompt caching on in
+  both arms, reporting billed tokens + latency + task-success. This is the missing proof point.
+- **Quality-preservation evaluation** — pair every savings number with a task-success rate.
+  A system that saves 90% of tokens but degrades outcomes by 20% is not a win. We need a
+  benchmark that reports both together.
 - **`kosh benchmark` subcommand** — run the four primitive suites as a single CLI command,
   output a machine-readable report so every release can track regression/improvement.
 - **Packet symbol resolution** — `kosh packet load` should resolve `@symbol` refs through
@@ -190,6 +228,13 @@ Kosh is early-stage infrastructure. The primitives work; the gaps are known.
 - **MCP server stub** — minimal stdio JSON-RPC server wrapping the CLI for native agent integration.
 - **Automatic packet generation** — use the indexer or import tracing to suggest packets
   based on co-accessed files.
+
+**Pressure-testing contributions are equally valuable:**
+
+A contributor who can demonstrate *where Kosh hurts task quality*, *where prompt caching already
+solves the problem sufficiently*, or *where deterministic planning breaks down on large repos*
+is as valuable as someone adding features. The project is early enough that strong criticism can
+change the architecture.
 
 **Design constraints (please read before opening a PR):**
 
@@ -214,8 +259,10 @@ cargo fmt --all  # enforced formatting
 v0.1  ✅  Aliases, symbols, cache, gain tracking, indexer
 v0.2  ✅  Context leasing, MCP batching, context packets, kosh rename
 v0.3  🔲  kosh benchmark CLI, packet symbol resolution, lease size accuracy
-v0.4  🔲  MCP server, real session replay benchmark
-v0.5  🔲  Automatic packet generation, session telemetry export
+v0.4  🔲  MCP proxy (transparent stdio interception), real session replay benchmark
+v0.5  🔲  Quality-preservation metrics (savings + task-success paired), session telemetry export
+v0.6  🔲  Deterministic context planning (map task → minimum required files, no repo exploration)
+v0.7  🔲  Fact memory (architecture decisions, known bugs — TSV/SQLite, confidence scores)
 ```
 
 ---
