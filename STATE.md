@@ -2,42 +2,34 @@
 
 Date: 2026-06-01
 
-This repository is **Kosh** — token elimination and context efficiency infrastructure for AI agents.
+This repository is **Kosh** — a token elimination and context efficiency platform for agentic development.
 
-## Milestone 2: COMPLETED
-- **Context Virtualization**: Proved 91.4% payload reduction (leasing 89.2%, packets 98.4%, batching 93.8%, compression 33.3%).
-- Binary: `kosh`, config: `.kosh/`, fallback: `.rtk/`
-- Primitive benchmark: `agent_test/kosh_benchmarks.py` — no LLM, raw payload measurement.
+## 🏁 Milestone 2: COMPLETED
+- **Context Virtualization**: Proved 91.4% payload reduction in benchmarks.
+- **Capabilities**: Leasing, Packets, Batching, Gain Tracking all functional and integrated.
+- **Infrastructure**: Full transition to **SQLite (kosh.db)** for concurrent, atomic state management.
 
-## Research findings (2026-06-01)
-External validation confirms Kosh's thesis:
-- 30,400 of 48,400 SWE-bench tokens came from tool results; 39.9–59.7% removable with no performance loss.
-- 10-step naive agent loop costs 43.3× more than a single call (triangular history accumulation).
-- Deterministic retrieval (SQLite FTS5, BM25, RRF) is competitive with embeddings for code context.
-- mcpwall proves transparent MCP stdio proxy is feasible, deterministic, production-ready.
-- SWE-Pruner: 23-54% token reduction while *improving* task success (uses 0.6B skimmer — not Kosh's path).
-- Poorly chosen context actively hurts, not neutrally — validates minimum-context thesis.
+## 🏗️ Milestone 3: IN PROGRESS (Context Awareness & Intelligence)
 
-## Roadmap
-```
-v0.1  ✅  Aliases, symbols, cache, gain tracking, indexer
-v0.2  ✅  Context leasing, MCP batching, context packets, kosh rename
-v0.3  🔲  kosh benchmark CLI, packet symbol resolution, lease size accuracy
-v0.4  🔲  Context signatures + composition (kosh signature match/compose — crate DONE, CLI pending)
-v0.5  🔲  Real session replay benchmark — actual API, prompt caching both arms, savings + task-success
-v0.6  🔲  MCP proxy — transparent stdio interception
-v0.7  🔲  Deterministic context planner — task → minimum required files, no repo exploration
-v0.8  🔲  Fact engine — TSV + SQLite FTS5, confidence scores, architecture decisions
-v0.9  🔲  Kosh OS — 0 redundant reads, context fingerprint → lease → fact → answer
-```
+### ✅ Completed
+- **3.1 Awareness Foundation**: Fingerprint V2 (Commit/Branch awareness) implemented.
+- **3.2 SQLite ROI tracking**: Tracking hits, usage, and tokens saved per lease.
+- **3.5 Resolver**: Multi-factor scoring engine (Recency/Savings/Frequency) implemented.
+- **3.5b Explainability**: `kosh context explain` provides transparent ROI reasoning.
+- **3.6 Symbol Extraction**: Tree-sitter powered DNA extraction for **Dart** and **Rust**.
+- **3.6a Context Signatures**: Deterministic signature hashes and `kosh context signature`.
 
-## Active work
-- `crates/context_signatures` — DONE (8 tests passing). Jaccard overlap, subsumption, composition, TSV round-trip.
-- `kosh signature` CLI subcommand — IN PROGRESS (Gemini agent).
-- `agent_test/session_replay.py` — IN PROGRESS (Gemini agent).
+### 🏗️ In Progress
+- **3.6b Signature Overlap Scoring**: Comparing task signatures against lease signatures to recommend context by code content.
 
-## Constraint
+### 📅 Pending
+- **3.7 Context Composition**: Composing minimal bundles of leases/packets for a task.
+- **3.8 Context Versioning**: Treating context like Git (versions + deltas).
+- **4.0 Deterministic Planner**: Provable context composition engine.
+
+## ⚠️ Known Fragilities
+- **Symbol Hashing**: `content_hash` in symbol table is currently a "TODO" (hashing symbol text needed).
+- **Branch/Commit Detection**: Suggestion engine currently assumes "main/HEAD" (needs dynamic git integration).
+
+## 🛑 Constraint
 No LLMs, no embeddings, no graph intelligence until Kosh proves substantial token savings using deterministic systems alone.
-
-## Push credential
-`GITHUB_TOKEN="" git push` (ankit1057 is active gh account).

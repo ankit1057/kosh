@@ -70,7 +70,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         "--version" | "-V" => {
-            println!("rtk {}", env!("CARGO_PKG_VERSION"));
+            println!("kosh {}", env!("CARGO_PKG_VERSION"));
             Ok(ExitCode::SUCCESS)
         }
         "gain" => handle_gain(&args[1..]),
@@ -98,20 +98,20 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
 
 fn print_help() {
     println!(
-        "rtk <alias|command> [args...]\n\
+        "kosh <alias|command> [args...]\n\
          \n\
          Examples:\n\
-           rtk gs\n\
-           rtk config init\n\
-           rtk mcp expand \"rf @authrepo\"\n\
-           rtk symbols put @authrepo src/auth.rs\n\
-           rtk lease create --repo kosh --feature auth --fingerprint xyz --summary \"Auth context\"\n\
-           rtk lease touch lease:auth:001\n\
-           rtk packet create --name auth --file src/auth.rs --symbol @authrepo\n\
-           rtk packet load auth\n\
-           rtk batch '[{{\"tool\":\"read_file\",\"path\":\"Cargo.toml\"}}]'\n\
-           rtk index\n\
-           rtk gain --history"
+           kosh gs\n\
+           kosh config init\n\
+           kosh mcp expand \"rf @authrepo\"\n\
+           kosh symbols put @authrepo src/auth.rs\n\
+           kosh lease create --repo kosh --feature auth --fingerprint xyz --summary \"Auth context\"\n\
+           kosh lease touch lease:auth:001\n\
+           kosh packet create --name auth --file src/auth.rs --symbol @authrepo\n\
+           kosh packet load auth\n\
+           kosh batch '[{{\"tool\":\"read_file\",\"path\":\"Cargo.toml\"}}]'\n\
+           kosh index\n\
+           kosh gain --history"
     );
 }
 
@@ -145,7 +145,7 @@ fn handle_index(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk index [--json|write|diff [--json]]".to_string()),
+        _ => Err("usage: kosh index [--json|write|diff [--json]]".to_string()),
     }
 }
 
@@ -272,7 +272,7 @@ fn handle_expand(args: &[String]) -> Result<ExitCode, String> {
     let expanded = expand_command(args, &aliases).join(" ");
 
     println!("{expanded}");
-    maybe_record_compression("cmd-preview", "ok", &input, &expanded, "ok")?;
+    maybe_record_compression("cmd-preview", &current_repo_name(), &current_feature_name(), &input, &expanded, "ok")?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -283,7 +283,7 @@ fn handle_mcp(args: &[String]) -> Result<ExitCode, String> {
             let expanded = expand_mcp_alias_with_symbols(&input)?;
             let json = expanded.to_compact_json();
             println!("{json}");
-            maybe_record_compression("mcp", "ok", &input, &json, "ok")?;
+            maybe_record_compression("mcp", &current_repo_name(), &current_feature_name(), &input, &json, "ok")?;
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
@@ -293,7 +293,7 @@ fn handle_mcp(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk mcp <expand|list>".to_string()),
+        _ => Err("usage: kosh mcp <expand|list>".to_string()),
     }
 }
 
@@ -322,7 +322,7 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
         Some("get") => {
             let key = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk cache get <repo:feature:hash>".to_string())?;
+                .ok_or_else(|| "usage: kosh cache get <repo:feature:hash>".to_string())?;
             let cache = ContextCache::load(cfg_path("cache.tsv")).map_err(format_io)?;
             let record = cache.get(key).ok_or_else(|| format!("cache miss: {key}"))?;
             println!("{}", record.to_compact_json());
@@ -335,7 +335,7 @@ fn handle_cache(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk cache <fingerprint|put|get|list>".to_string()),
+        _ => Err("usage: kosh cache <fingerprint|put|get|list>".to_string()),
     }
 }
 
@@ -347,7 +347,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
         "resolve" => {
             let query = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk context resolve <query>".to_string())?;
+                .ok_or_else(|| "usage: kosh context resolve <query>".to_string())?;
             let recommendations = resolver.resolve_query(query);
             for rec in recommendations {
                 println!("{}", serde_json::to_string(&rec).unwrap());
@@ -384,7 +384,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
         "signature" => {
             let lease_id = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk context signature <lease_id>".to_string())?;
+                .ok_or_else(|| "usage: kosh context signature <lease_id>".to_string())?;
             let table = SymbolTable::open(cfg_path("kosh.db")).map_err(format_db_error)?;
             let symbols = table.get_lease_signature(lease_id).map_err(format_db_error)?;
             let meta = table.get_signature_metadata(lease_id).map_err(format_db_error)?;
@@ -414,7 +414,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
         "extract" => {
             let lease_id = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk context extract <lease_id>".to_string())?;
+                .ok_or_else(|| "usage: kosh context extract <lease_id>".to_string())?;
             let lease_store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
             let symbol_table = SymbolTable::open(cfg_path("kosh.db")).map_err(format_db_error)?;
 
@@ -465,7 +465,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk context <resolve|suggest|explain|signature|extract>".to_string()),
+        _ => Err("usage: kosh context <resolve|suggest|explain|signature|extract>".to_string()),
     }
 }
 
@@ -556,7 +556,7 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
         Some("get") => {
             let id = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk lease get <id>".to_string())?;
+                .ok_or_else(|| "usage: kosh lease get <id>".to_string())?;
             let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
             let mut stmt = store
                 .conn
@@ -606,7 +606,7 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             );
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk lease <create|get|list|touch|stats>".to_string()),
+        _ => Err("usage: kosh lease <create|get|list|touch|stats>".to_string()),
     }
 }
 
@@ -628,7 +628,7 @@ fn touch_lease_logic(id: &str) -> Result<String, String> {
 
     let compact = format!("lease:{}", id);
     let expanded_dummy = "a".repeat(byte_size as usize);
-    maybe_record_compression("lease_hit", "ok", &compact, &expanded_dummy, "ok")?;
+    maybe_record_compression("lease_hit", &current_repo_name(), &current_feature_name(), &compact, &expanded_dummy, "ok")?;
 
     Ok(format!("{{\"id\":\"{}\",\"byte_size\":{}}}", id, byte_size))
 }
@@ -643,7 +643,7 @@ fn handle_config(args: &[String]) -> Result<ExitCode, String> {
             println!("created {} config", config_dir());
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk config init".to_string()),
+        _ => Err("usage: kosh config init".to_string()),
     }
 }
 
@@ -652,10 +652,10 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
         Some("put") => {
             let symbol = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk symbols put <@symbol> <value>".to_string())?;
+                .ok_or_else(|| "usage: kosh symbols put <@symbol> <value>".to_string())?;
             let value = args
                 .get(2)
-                .ok_or_else(|| "usage: rtk symbols put <@symbol> <value>".to_string())?;
+                .ok_or_else(|| "usage: kosh symbols put <@symbol> <value>".to_string())?;
             let alias = SymbolAlias::new(symbol, value)?;
             let mut aliases = load_symbol_aliases()?;
             aliases.retain(|candidate| candidate.symbol != alias.symbol);
@@ -667,7 +667,7 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
         Some("get") => {
             let symbol = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk symbols get <@symbol>".to_string())?;
+                .ok_or_else(|| "usage: kosh symbols get <@symbol>".to_string())?;
             let aliases = load_symbol_aliases()?;
             let resolved = resolve_symbol_alias(symbol, &aliases);
             if resolved == *symbol {
@@ -683,7 +683,7 @@ fn handle_symbols(args: &[String]) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: rtk symbols <put|get|list>".to_string()),
+        _ => Err("usage: kosh symbols <put|get|list>".to_string()),
     }
 }
 
@@ -705,7 +705,8 @@ fn execute_expanded(args: &[String]) -> Result<ExitCode, String> {
 
     maybe_record_compression(
         "cmd",
-        "ok",
+        &current_repo_name(),
+        &current_feature_name(),
         &input,
         &expanded,
         &format!("exit:{exit_code}"),
@@ -794,15 +795,16 @@ fn format_db_error(error: RusqliteError) -> String {
 
 fn maybe_record_compression(
     kind: &str,
-    status: &str,
+    repo: &str,
+    feature: &str,
     compact: &str,
     expanded: &str,
-    _meta: &str,
+    status: &str,
 ) -> Result<(), String> {
     let record = CompressionRecord::with_metadata(
         current_timestamp_seconds(),
-        current_repo_name(),
-        current_feature_name(),
+        repo.to_string(),
+        feature.to_string(),
         kind,
         compact,
         expanded,
@@ -1077,11 +1079,11 @@ fn handle_batch(args: &[String]) -> Result<ExitCode, String> {
     let json_input: String = if args.first().map(String::as_str) == Some("--file") {
         let path = args
             .get(1)
-            .ok_or_else(|| "usage: rtk batch --file <path>".to_string())?;
+            .ok_or_else(|| "usage: kosh batch --file <path>".to_string())?;
         fs::read_to_string(path).map_err(format_io)?
     } else if args.is_empty() {
         return Err(
-            "usage: rtk batch '<json-array>'\n       rtk batch --file <path>".to_string(),
+            "usage: kosh batch '<json-array>'\n       kosh batch --file <path>".to_string(),
         );
     } else {
         args.join(" ")
@@ -1121,7 +1123,7 @@ fn handle_batch(args: &[String]) -> Result<ExitCode, String> {
     };
 
     let expanded = result_lines.join("\n");
-    maybe_record_compression("mcp_batch", "ok", &json_input, &expanded, overall_status)?;
+    maybe_record_compression("mcp_batch", &current_repo_name(), &current_feature_name(), &json_input, &expanded, overall_status)?;
 
     Ok(ExitCode::SUCCESS)
 }
@@ -1189,7 +1191,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             }
 
             let name = name.ok_or(
-                "rtk packet create --name <name> [--file <path>]... [--symbol <@sym>]...",
+                "kosh packet create --name <name> [--file <path>]... [--symbol <@sym>]...",
             )?;
             let ts = current_timestamp_seconds();
             let record = PacketRecord::new(&name, files, symbols, ts);
@@ -1200,14 +1202,14 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             store.save(&cfg_path("packets.tsv")).map_err(format_io)?;
 
             println!("{json}");
-            maybe_record_compression("packet_create", "ok", &name, &json, "ok")?;
+            maybe_record_compression("packet_create", &current_repo_name(), &current_feature_name(), &name, &json, "ok")?;
             Ok(ExitCode::SUCCESS)
         }
 
         "load" => {
             let name = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk packet load <name>".to_string())?;
+                .ok_or_else(|| "usage: kosh packet load <name>".to_string())?;
             let json = load_packet_as_batch(name)?;
             println!("{}", json);
             Ok(ExitCode::SUCCESS)
@@ -1227,7 +1229,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
         }
 
         "delete" => {
-            let name = args.get(1).ok_or("rtk packet delete <name>")?;
+            let name = args.get(1).ok_or("kosh packet delete <name>")?;
 
             let mut store = PacketStore::load(&cfg_path("packets.tsv")).map_err(format_io)?;
             if store.delete(name) {
@@ -1239,7 +1241,7 @@ fn handle_packet(args: &[String]) -> Result<ExitCode, String> {
             }
         }
 
-        _ => Err("usage: rtk packet <create|load|list|delete>".to_string()),
+        _ => Err("usage: kosh packet <create|load|list|delete>".to_string()),
     }
 }
 
@@ -1263,7 +1265,7 @@ fn load_packet_as_batch(name: &str) -> Result<String, String> {
     }
 
     let batch_json = format!("[{}]", calls.join(","));
-    maybe_record_compression("packet_load", "ok", name, &batch_json, "ok")?;
+    maybe_record_compression("packet_load", &current_repo_name(), &current_feature_name(), name, &batch_json, "ok")?;
     Ok(batch_json)
 }
 
@@ -1306,7 +1308,7 @@ fn handle_skill(args: &[String]) -> Result<ExitCode, String> {
                 i += 1;
             }
 
-            let name = name.ok_or("rtk skill create --name <name> --desc <description> [--cmd <cmd>]... [--mcp <mcp>]...")?;
+            let name = name.ok_or("kosh skill create --name <name> --desc <description> [--cmd <cmd>]... [--mcp <mcp>]...")?;
             let description = description.unwrap_or_default();
 
             let mut store = SkillStore::load(&cfg_path("skills.tsv")).map_err(format_io)?;
@@ -1316,14 +1318,14 @@ fn handle_skill(args: &[String]) -> Result<ExitCode, String> {
             store.save(&cfg_path("skills.tsv")).map_err(format_io)?;
 
             println!("{json}");
-            maybe_record_compression("skill_create", "ok", &name, &json, "ok")?;
+            maybe_record_compression("skill_create", &current_repo_name(), &current_feature_name(), &name, &json, "ok")?;
             Ok(ExitCode::SUCCESS)
         }
 
         "run" => {
             let name = args
                 .get(1)
-                .ok_or_else(|| "usage: rtk skill run <name>".to_string())?;
+                .ok_or_else(|| "usage: kosh skill run <name>".to_string())?;
             let report = run_skill_logic(name)?;
             println!("{}", report);
             Ok(ExitCode::SUCCESS)
@@ -1342,7 +1344,7 @@ fn handle_skill(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
 
-        _ => Err("usage: rtk skill <create|run|list>".to_string()),
+        _ => Err("usage: kosh skill <create|run|list>".to_string()),
     }
 }
 
@@ -1373,7 +1375,7 @@ fn run_skill_logic(name: &str) -> Result<String, String> {
     }
 
     let expanded = expanded_lines.join("\n");
-    maybe_record_compression("skill_run", "ok", name, &expanded, "ok")?;
+    maybe_record_compression("skill_run", &current_repo_name(), &current_feature_name(), name, &expanded, "ok")?;
     Ok(expanded)
 }
 // ── Signature ─────────────────────────────────────────────────────────────────
