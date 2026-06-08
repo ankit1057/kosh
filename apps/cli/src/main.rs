@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use cache_engine::db::{ContextFingerprintV2, DbLeaseRecord, DbLeaseStore};
-use cache_engine::{CacheRecord, ContextCache, ContextFingerprint};
+use cache_engine::db::{ContextFingerprintV2, DbLeaseStore};
+use cache_engine::{CacheRecord, ContextCache, ContextFingerprint, ContextLeaseManager};
 use context_resolver::ContextResolver;
 use cost_estimator::{
     parse_compression_history, summarize_compression, summarize_compression_by_context,
@@ -90,6 +90,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "mcp-proxy" => handle_mcp_proxy(&args[1..]),
         "skill" => handle_skill(&args[1..]),
         "symbols" => handle_symbols(&args[1..]),
+        "why" => handle_why(&args[1..]),
         "serve" => handle_serve(&args[1..]),
         "proxy" => execute_raw(&args[1..]),
         _ => execute_expanded(&args),
@@ -426,7 +427,7 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
 
             let mut all_symbols = Vec::new();
             for file_path in &lease.file_list {
-                if let Ok(source) = fs::read_to_string(file_path) {
+                if let Ok(source) = fs::read_to_string::<&String>(file_path) {
                     let symbols = if file_path.ends_with(".dart") {
                         DartExtractor::extract_symbols(&source)
                     } else if file_path.ends_with(".rs") {
@@ -434,10 +435,10 @@ fn handle_context(args: &[String]) -> Result<ExitCode, String> {
                     } else {
                         Vec::new()
                     };
-                    for (name, kind) in symbols {
+                    for (name, kind) in symbols.into_iter() {
                         let record = SymbolRecord {
                             id: None,
-                            name: name.clone(),
+                            name: name.clone() as String,
                             kind,
                             file_path: file_path.clone(),
                             repo: lease.repo.clone(),
@@ -477,41 +478,17 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let mut fingerprint_hash: Option<String> = None;
             let mut summary: Option<String> = None;
             let mut byte_size: Option<u64> = None;
-            let mut files: Vec<String> = Vec::new();
+            let mut ttl: Option<u64> = None;
 
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
-                    "--repo" => {
-                        i += 1;
-                        repo = Some(args.get(i).ok_or("--repo requires value")?.clone());
-                    }
-                    "--feature" => {
-                        i += 1;
-                        feature = Some(args.get(i).ok_or("--feature requires value")?.clone());
-                    }
-                    "--fingerprint" => {
-                        i += 1;
-                        fingerprint_hash =
-                            Some(args.get(i).ok_or("--fingerprint requires value")?.clone());
-                    }
-                    "--summary" => {
-                        i += 1;
-                        summary = Some(args.get(i).ok_or("--summary requires value")?.clone());
-                    }
-                    "--size" => {
-                        i += 1;
-                        byte_size = Some(
-                            args.get(i)
-                                .ok_or("--size requires value")?
-                                .parse()
-                                .map_err(|_| "invalid size")?,
-                        );
-                    }
-                    "--file" => {
-                        i += 1;
-                        files.push(args.get(i).ok_or("--file requires value")?.clone());
-                    }
+                    "--repo" => { i += 1; repo = Some(args.get(i).ok_or("--repo requires value")?.clone()); }
+                    "--feature" => { i += 1; feature = Some(args.get(i).ok_or("--feature requires value")?.clone()); }
+                    "--fingerprint" => { i += 1; fingerprint_hash = Some(args.get(i).ok_or("--fingerprint requires value")?.clone()); }
+                    "--summary" => { i += 1; summary = Some(args.get(i).ok_or("--summary requires value")?.clone()); }
+                    "--size" => { i += 1; byte_size = Some(args.get(i).ok_or("--size requires value")?.parse().map_err(|_| "invalid size")?); }
+                    "--ttl" => { i += 1; ttl = Some(args.get(i).ok_or("--ttl requires value")?.parse().map_err(|_| "invalid ttl")?); }
                     _ => {}
                 }
                 i += 1;
@@ -522,117 +499,117 @@ fn handle_lease(args: &[String]) -> Result<ExitCode, String> {
             let fingerprint_hash = fingerprint_hash.ok_or("missing --fingerprint")?;
             let summary = summary.unwrap_or_default();
             let byte_size = byte_size.unwrap_or_else(|| {
-                load_index_snapshot()
-                    .map(|snapshot| snapshot.summary().bytes)
-                    .unwrap_or(20_000)
+                load_index_snapshot().map(|snapshot| snapshot.summary().bytes).unwrap_or(20_000)
             });
 
-            let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
-            // Generate a simple ID for now
-            let id = format!(
-                "lease:{}:{:03}",
-                feature,
-                current_timestamp_seconds() % 1000
-            );
+            let mut manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+            let record = manager.create_lease(&repo, &feature, &fingerprint_hash, &summary, byte_size, ttl);
+            manager.save(cfg_path("leases.tsv")).map_err(format_io)?;
 
-            let record = DbLeaseRecord {
-                id: id.clone(),
-                repo,
-                feature,
-                fingerprint_hash,
-                summary,
-                byte_size,
-                created_at: current_timestamp_seconds(),
-                access_count: 0,
-                last_used: None,
-                tokens_saved: 0,
-                file_list: files,
-            };
-
-            store.insert_lease(&record).map_err(format_db_error)?;
-            println!("{{\"id\":\"{}\"}}", id);
+            println!("{}", record.to_compact_json());
             Ok(ExitCode::SUCCESS)
         }
         Some("get") => {
-            let id = args
-                .get(1)
-                .ok_or_else(|| "usage: kosh lease get <id>".to_string())?;
-            let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
-            let mut stmt = store
-                .conn
-                .prepare("SELECT id, repo, feature, fingerprint_hash, summary, byte_size, created_at, access_count, last_used, tokens_saved FROM leases WHERE id = ?")
-                .map_err(format_db_error)?;
-            let record = stmt
-                .query_row(params![id], |row: &rusqlite::Row| {
-                    Ok(format!(
-                        "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"fingerprint\":\"{}\",\"summary\":\"{}\",\"byte_size\":{},\"created_at\":{},\"access_count\":{},\"last_used\":{:?},\"tokens_saved\":{}}}",
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4).unwrap_or_default(),
-                        row.get::<_, u64>(5)?,
-                        row.get::<_, u64>(6)?,
-                        row.get::<_, u64>(7)?,
-                        row.get::<_, Option<u64>>(8)?,
-                        row.get::<_, u64>(9)?,
-                    ))
-                })
-                .map_err(|_| format!("lease miss: {id}"))?;
-            println!("{}", record);
+            let id = args.get(1).ok_or_else(|| "usage: rtk lease get <id>".to_string())?;
+            let manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+            let lease = manager.get(id).ok_or_else(|| format!("lease miss: {id}"))?;
+            println!("{}", lease.to_compact_json());
+            Ok(ExitCode::SUCCESS)
+        }
+        Some("touch") => {
+            let id = args.get(1).ok_or_else(|| "usage: rtk lease touch <id>".to_string())?;
+            let json = touch_lease_logic(id)?;
+            println!("{}", json);
             Ok(ExitCode::SUCCESS)
         }
         Some("list") => {
-            let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
-            let leases = store.list_all().map_err(format_db_error)?;
-            for lease in leases {
-                println!(
-                    "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"byte_size\":{},\"access_count\":{}}}",
-                    lease.id, lease.repo, lease.feature, lease.byte_size, lease.access_count
-                );
+            let manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+            for record in manager.records() {
+                println!("{}", record.to_compact_json());
             }
             Ok(ExitCode::SUCCESS)
         }
         Some("stats") => {
-            let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
-            let leases = store.list_all().map_err(format_db_error)?;
-            let total_accesses: u64 = leases.iter().map(|r| r.access_count).sum();
-            let total_tokens: u64 = leases.iter().map(|r| r.tokens_saved).sum();
+            let manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+            let total_accesses: u64 = manager.records().iter().map(|r| r.access_count).sum();
+            let total_tokens: u64 = manager.records().iter().map(|r| r.tokens_saved).sum();
             println!(
                 "{{\"total_leases\":{},\"total_accesses\":{},\"total_tokens_saved\":{}}}",
-                leases.len(),
+                manager.records().len(),
                 total_accesses,
                 total_tokens
             );
             Ok(ExitCode::SUCCESS)
         }
-        _ => Err("usage: kosh lease <create|get|list|touch|stats>".to_string()),
+        _ => Err("usage: rtk lease <create|get|list|touch|stats>".to_string()),
     }
 }
 
 fn touch_lease_logic(id: &str) -> Result<String, String> {
-    let store = DbLeaseStore::open(cfg_path("kosh.db")).map_err(format_db_error)?;
-    let mut stmt = store
-        .conn
-        .prepare("SELECT byte_size FROM leases WHERE id = ?")
-        .map_err(format_db_error)?;
-    let byte_size: u64 = stmt
-        .query_row(params![id], |r: &rusqlite::Row| r.get(0))
-        .map_err(|_| format!("lease miss: {id}"))?;
+    let mut manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+    
+    // Check if expired before touching
+    let is_expired = manager.get(id).map(|l| l.is_expired()).unwrap_or(false);
+    if is_expired {
+        return Err(format!("lease expired: {id}"));
+    }
 
-    // In a real system, we'd estimate tokens based on actual content
-    let simulated_tokens = byte_size / 4;
-    store
-        .record_hit(id, simulated_tokens)
-        .map_err(format_db_error)?;
+    let byte_size = manager.get(id).map(|l| l.byte_size).ok_or_else(|| format!("lease miss: {id}"))?;
+    let repo = manager.get(id).unwrap().repo.clone();
+    let feature = manager.get(id).unwrap().feature.clone();
 
+    // Record token compression
     let compact = format!("lease:{}", id);
+    let simulated_tokens = byte_size / 4;
     let expanded_dummy = "a".repeat(byte_size as usize);
-    maybe_record_compression("lease_hit", &current_repo_name(), &current_feature_name(), &compact, &expanded_dummy, "ok")?;
+    
+    manager.touch(id, simulated_tokens).ok_or_else(|| format!("lease miss: {id}"))?;
 
-    Ok(format!("{{\"id\":\"{}\",\"byte_size\":{}}}", id, byte_size))
+    maybe_record_compression("lease_hit", &repo, &feature, &compact, &expanded_dummy, "ok")?;
+
+    manager.save(cfg_path("leases.tsv")).map_err(format_io)?;
+    let lease = manager.get(id).unwrap();
+    Ok(lease.to_compact_json())
 }
 
+fn handle_why(args: &[String]) -> Result<ExitCode, String> {
+    let query = args.first().ok_or_else(|| "usage: rtk why <query>".to_string())?;
+    let resolver = ContextResolver::open(cfg_path("kosh.db"), cfg_path("packets.tsv"))?;
+    let recommendations = resolver.resolve_query(query);
+
+    if recommendations.is_empty() {
+        println!("No recommendations found for query: {query}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let best = &recommendations[0];
+    println!("Recommended:");
+    if let Some(id) = &best.lease_id {
+        println!("  {}", id);
+    } else if let Some(name) = &best.packet_name {
+        println!("  packet:{}", name);
+    }
+
+    println!("\nReason:");
+    println!("- {}", best.reason);
+    
+    // If it's a lease, show more stats
+    if let Some(id) = &best.lease_id {
+        let manager = ContextLeaseManager::load(cfg_path("leases.tsv")).map_err(format_io)?;
+        if let Some(lease) = manager.get(id) {
+            println!("- reused {} times", lease.access_count);
+            println!("- saved {} tokens", lease.tokens_saved);
+            if !lease.repo.is_empty() && lease.repo == current_repo_name() {
+                println!("- repo matches current workspace");
+            }
+        }
+    }
+
+    println!("\nScore:");
+    println!("  {:.2}", best.score);
+
+    Ok(ExitCode::SUCCESS)
+}
 fn handle_config(args: &[String]) -> Result<ExitCode, String> {
     match args.first().map(String::as_str) {
         Some("init") => {

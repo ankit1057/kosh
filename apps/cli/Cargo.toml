@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "kosh"
+name = "rtk"
 path = "src/main.rs"
 
 [dependencies]

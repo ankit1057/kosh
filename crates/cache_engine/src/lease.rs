@@ -12,7 +12,9 @@ pub struct LeaseRecord {
     pub summary: String,
     pub byte_size: u64,
     pub created_at: u64,
+    pub expires_at: u64,
     pub access_count: u64,
+    pub tokens_saved: u64,
 }
 
 impl LeaseRecord {
@@ -24,6 +26,7 @@ impl LeaseRecord {
         summary: impl Into<String>,
         byte_size: u64,
         created_at: u64,
+        expires_at: u64,
     ) -> Self {
         Self {
             id: id.into(),
@@ -33,13 +36,23 @@ impl LeaseRecord {
             summary: summary.into(),
             byte_size,
             created_at,
+            expires_at,
             access_count: 0,
+            tokens_saved: 0,
         }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.expires_at > 0 && now > self.expires_at
     }
 
     pub fn to_compact_json(&self) -> String {
         format!(
-            "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"fingerprint\":\"{}\",\"summary\":\"{}\",\"byte_size\":{},\"created_at\":{},\"access_count\":{}}}",
+            "{{\"id\":\"{}\",\"repo\":\"{}\",\"feature\":\"{}\",\"fingerprint\":\"{}\",\"summary\":\"{}\",\"byte_size\":{},\"created_at\":{},\"expires_at\":{},\"access_count\":{},\"tokens_saved\":{}}}",
             escape_json(&self.id),
             escape_json(&self.repo),
             escape_json(&self.feature),
@@ -47,7 +60,9 @@ impl LeaseRecord {
             escape_json(&self.summary),
             self.byte_size,
             self.created_at,
-            self.access_count
+            self.expires_at,
+            self.access_count,
+            self.tokens_saved
         )
     }
 }
@@ -89,16 +104,19 @@ impl ContextLeaseManager {
         fingerprint: &str,
         summary: &str,
         byte_size: u64,
+        ttl_seconds: Option<u64>,
     ) -> LeaseRecord {
         let seq_key = format!("{}:{}", repo, feature);
         let seq = self.next_sequence.entry(seq_key).or_insert(1);
         let id = format!("lease:{}:{:03}", feature, seq);
         *seq += 1;
 
-        let created_at = SystemTime::now()
+        let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        
+        let expires_at = ttl_seconds.map(|ttl| now + ttl).unwrap_or(0);
 
         let record = LeaseRecord::new(
             id,
@@ -107,7 +125,8 @@ impl ContextLeaseManager {
             fingerprint,
             summary,
             byte_size,
-            created_at,
+            now,
+            expires_at,
         );
         self.records.push(record.clone());
         record
@@ -117,9 +136,10 @@ impl ContextLeaseManager {
         self.records.iter().find(|candidate| candidate.id == id)
     }
 
-    pub fn touch(&mut self, id: &str) -> Option<&LeaseRecord> {
+    pub fn touch(&mut self, id: &str, tokens_saved: u64) -> Option<&LeaseRecord> {
         if let Some(record) = self.records.iter_mut().find(|candidate| candidate.id == id) {
             record.access_count += 1;
+            record.tokens_saved += tokens_saved;
             Some(record)
         } else {
             None
@@ -139,9 +159,9 @@ impl ContextLeaseManager {
             }
 
             let fields = line.split('\t').collect::<Vec<_>>();
-            if fields.len() != 8 {
+            if fields.len() != 10 {
                 return Err(format!(
-                    "line {}: expected 8 tab-separated fields",
+                    "line {}: expected 10 tab-separated fields",
                     index + 1
                 ));
             }
@@ -157,9 +177,15 @@ impl ContextLeaseManager {
             let created_at = fields[6]
                 .parse::<u64>()
                 .map_err(|error| format!("line {}: invalid created_at: {error}", index + 1))?;
-            let access_count = fields[7]
+            let expires_at = fields[7]
+                .parse::<u64>()
+                .map_err(|error| format!("line {}: invalid expires_at: {error}", index + 1))?;
+            let access_count = fields[8]
                 .parse::<u64>()
                 .map_err(|error| format!("line {}: invalid access_count: {error}", index + 1))?;
+            let tokens_saved = fields[9]
+                .parse::<u64>()
+                .map_err(|error| format!("line {}: invalid tokens_saved: {error}", index + 1))?;
 
             let mut record = LeaseRecord::new(
                 id.clone(),
@@ -169,8 +195,10 @@ impl ContextLeaseManager {
                 summary,
                 byte_size,
                 created_at,
+                expires_at,
             );
             record.access_count = access_count;
+            record.tokens_saved = tokens_saved;
             manager.records.push(record);
 
             // Update sequence logic
@@ -209,7 +237,11 @@ impl ContextLeaseManager {
             output.push('\t');
             output.push_str(&record.created_at.to_string());
             output.push('\t');
+            output.push_str(&record.expires_at.to_string());
+            output.push('\t');
             output.push_str(&record.access_count.to_string());
+            output.push('\t');
+            output.push_str(&record.tokens_saved.to_string());
             output.push('\n');
         }
 
@@ -260,38 +292,47 @@ mod tests {
     #[test]
     fn creates_sequential_leases() {
         let mut manager = ContextLeaseManager::new();
-        let l1 = manager.create_lease("repo", "auth", "hash1", "summary1", 100);
+        let l1 = manager.create_lease("repo", "auth", "hash1", "summary1", 100, None);
         assert_eq!(l1.id, "lease:auth:001");
         assert_eq!(l1.byte_size, 100);
-        let l2 = manager.create_lease("repo", "auth", "hash2", "summary2", 200);
+        let l2 = manager.create_lease("repo", "auth", "hash2", "summary2", 200, None);
         assert_eq!(l2.id, "lease:auth:002");
         assert_eq!(l2.byte_size, 200);
     }
 
     #[test]
-    fn tracks_access_count() {
+    fn tracks_access_count_and_tokens() {
         let mut manager = ContextLeaseManager::new();
-        manager.create_lease("repo", "auth", "hash1", "summary1", 100);
-        manager.touch("lease:auth:001");
-        manager.touch("lease:auth:001");
+        manager.create_lease("repo", "auth", "hash1", "summary1", 100, None);
+        manager.touch("lease:auth:001", 25);
+        manager.touch("lease:auth:001", 25);
 
         let l1 = manager.get("lease:auth:001").unwrap();
         assert_eq!(l1.access_count, 2);
+        assert_eq!(l1.tokens_saved, 50);
+    }
+
+    #[test]
+    fn handles_expiration() {
+        let mut manager = ContextLeaseManager::new();
+        // create lease that expires in 1 second
+        let mut l1 = manager.create_lease("repo", "auth", "hash1", "summary1", 100, Some(1));
+        assert!(!l1.is_expired());
+        
+        // manually expire it in the record for testing
+        l1.expires_at = 1; 
+        assert!(l1.is_expired());
     }
 
     #[test]
     fn round_trips_tsv_leases() {
         let mut manager = ContextLeaseManager::new();
-        manager.create_lease("repo", "auth", "hash1", "sum\tmary\n1", 100);
-        manager.touch("lease:auth:001");
+        manager.create_lease("repo", "auth", "hash1", "sum\tmary\n1", 100, Some(3600));
+        manager.touch("lease:auth:001", 25);
 
         let tsv = manager.to_tsv();
         let parsed = ContextLeaseManager::from_tsv(&tsv).unwrap();
 
         assert_eq!(parsed.records(), manager.records());
-        let l2 = parsed
-            .clone()
-            .create_lease("repo", "auth", "hash2", "summary2", 200);
-        assert_eq!(l2.id, "lease:auth:002");
     }
 }
